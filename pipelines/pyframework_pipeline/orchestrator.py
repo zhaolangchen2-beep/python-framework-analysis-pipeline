@@ -505,6 +505,10 @@ def _run_benchmark_pyspark(
         if not queries:
             raise StepError("No queries configured")
 
+        # Run each query using collect_results.py in spark-master
+        master_container = fw_config.master_container
+        master_workdir = fw_config.master_workdir
+
         # Set up perf recording
         logger.info("[5a] Deploying perf wrapper on %s...", platform)
         tm_count = _parse_tm_count(env_config)
@@ -528,9 +532,6 @@ def _run_benchmark_pyspark(
             perf_data_path=fw_config.get_perf_data_path(),
         )
 
-        # Run each query using collect_results.py in spark-master
-        master_container = fw_config.master_container
-        master_workdir = fw_config.master_workdir
 
         for query in queries:
             logger.info("[5a] Running query %s on %s...", query, platform)
