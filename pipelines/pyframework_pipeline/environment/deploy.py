@@ -95,7 +95,7 @@ def deploy_plan(
     from .planning import generate_plan
 
     env_config = load_environment_config(project_path)
-    project_config = load_project_config(project_path / "project.yaml")
+    project_config = load_project_config(project_path)
 
     # Load or generate plan.
     if plan_path and plan_path.exists():
