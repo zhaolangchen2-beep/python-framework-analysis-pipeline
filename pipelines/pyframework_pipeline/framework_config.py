@@ -15,10 +15,9 @@ def get_framework_id(project_path: Path) -> str:
     Parameters
     ----------
     project_path : Path
-        Path to the project directory (not the project.yaml file).
+        Path to the resolved project.yaml file.
     """
-    project_yaml = project_path / "project.yaml"
-    config = load_project_config(project_yaml)
+    config = load_project_config(project_path)
     return config.get("frameworkId", "pyflink")
 
 
