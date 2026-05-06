@@ -526,7 +526,7 @@ def _run_benchmark_pyspark(
                 f"docker exec {master_container} {python_bin} "
                 f"{master_workdir}/collect_results.py "
                 f"--query {query} --rows {rows} "
-                f"--output-dir /opt/spark/work-dir/timing",
+                f"--output-dir /opt/spark/apps/timing",
                 timeout=300,
                 stream=True,
             )
@@ -542,7 +542,7 @@ def _run_benchmark_pyspark(
 
             # Copy timing results from container
             executor.run(
-                f"docker cp {master_container}:/opt/spark/work-dir/timing/timing-normalized.json "
+                f"docker cp {master_container}:/opt/spark/apps/timing/timing-normalized.json "
                 f"{timing_output_dir}/timing-normalized.json",
                 timeout=30,
             )

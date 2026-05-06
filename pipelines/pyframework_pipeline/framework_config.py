@@ -45,14 +45,14 @@ class FrameworkConfig:
     def master_workdir(self) -> str:
         """Working directory path in the master container."""
         if self.framework_id == "pyspark":
-            return "/opt/spark/work-dir"
+            return "/opt/spark/apps"
         return "/opt/flink/usrlib"
 
     @property
     def worker_workdir(self) -> str:
         """Working directory path in worker containers."""
         if self.framework_id == "pyspark":
-            return "/opt/spark/work-dir"
+            return "/opt/spark/apps"
         return "/opt/flink/usrlib"
 
     def benchmark_command(
