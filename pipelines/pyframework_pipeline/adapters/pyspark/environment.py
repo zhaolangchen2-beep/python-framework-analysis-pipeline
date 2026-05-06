@@ -39,12 +39,7 @@ class PySparkEnvironmentAdapter:
             platform,
             software.get("sparkImage", DEFAULT_IMAGE),
         )
-        registry = software.get("dockerRegistry", "")
-        if registry:
-            image = f"{registry}/{image}"
-        network = software.get("containerNetwork", DEFAULT_NETWORK)
         worker_count = DEFAULT_WORKER_COUNT
-        arch = platform_config.get("arch", "x86_64")
 
         # Determine the host
         hosts_by_role = {}
@@ -53,111 +48,32 @@ class PySparkEnvironmentAdapter:
 
         master_host = hosts_by_role.get("master", hosts_by_role.get("client", ""))
         host_alias = host_refs.get(master_host, {}).get("alias", master_host)
-        raw_host_env = host_refs.get(master_host, {}).get("env", {})
-        host_env = raw_host_env if isinstance(raw_host_env, dict) else {}
 
-        # Build docker exec proxy flags
-        _proxy_vars = ["http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
-        docker_proxy_flags = " ".join(
-            f"-e {k}={v}" for k, v in host_env.items() if k in _proxy_vars and v
-        )
-        python_version = software.get("pythonVersion", "3.11")
-
-        # Step 0: Build Spark+PySpark image (skip if already exists)
-        build_script = "adapters/pyspark/scripts/build-spark-image.sh"
-        base_image = software.get("sparkImage", DEFAULT_IMAGE)
-        if registry:
-            base_image = f"{registry}/{base_image}"
-        build_env = (
-            f"IMAGE_NAME={image} BASE_IMAGE={base_image} "
-            f"NETWORK={network} PYTHON_VERSION={python_version} "
-            f"WORKER_COUNT={worker_count}"
-        )
-        steps.append(PlanStep(
-            id="build-spark-image",
-            kind="build",
-            hostRef=master_host,
-            command=(
-                f"docker image inspect {image} >/dev/null 2>&1 "
-                f"|| {build_env} bash /tmp/build-spark-image.sh {arch}"
-            ),
-            description=f"Build Spark+PySpark image on {host_alias} (~30 min first run)",
-            mutatesHost=True,
-            requiresApproval=True,
-            rollbackHint=f"docker rmi {image}",
-            scriptPath=build_script,
-            timeout=2400,  # ~40 min
-        ))
-
-        # Step 1: Create Docker network
-        steps.append(PlanStep(
-            id="create-network",
-            kind="prepare",
-            hostRef=master_host,
-            command=f"docker network create {network} 2>/dev/null || true",
-            description=f"Create Docker network '{network}' on {host_alias}",
-        ))
-
-        # Step 2: Start Master
-        master_run_args = (
-            f"docker run -d --name pyspark-spark-master --network {network} "
-            f"-p 8080:8080 -p 7077:7077 --privileged {image} "
-            f"/opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
-        )
-        steps.append(PlanStep(
-            id="start-master",
-            kind="framework-start",
-            hostRef=master_host,
-            command=_docker_reconcile_container(
-                name="pyspark-spark-master",
-                image=image,
-                run_args=master_run_args,
-            ),
-            description=f"Start Spark Master container on {host_alias}",
-            mutatesHost=True,
-            requiresApproval=True,
-            rollbackHint="docker rm -f pyspark-spark-master",
-        ))
-
-        # Step 3: Start Workers
-        for i in range(1, worker_count + 1):
+        # Step 0: Verify expected containers already exist
+        expected_containers = ["pyspark-spark-master"] + [
+            f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1)
+        ]
+        for name in expected_containers:
             steps.append(PlanStep(
-                id=f"start-worker-{i}",
-                kind="framework-start",
+                id=f"check-container-{name}",
+                kind="framework-readiness",
                 hostRef=master_host,
-                command=_docker_reconcile_container(
-                    name=f"pyspark-spark-worker-{i}",
-                    image=image,
-                    run_args=(
-                        f"docker run -d --name pyspark-spark-worker-{i} --network {network} "
-                        f"--privileged {image} "
-                        f"/opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker "
-                        f"spark://pyspark-spark-master:7077"
-                    ),
-                ),
-                description=f"Start Worker {i} container on {host_alias}",
-                mutatesHost=True,
-                requiresApproval=True,
-                rollbackHint=f"docker rm -f pyspark-spark-worker-{i}",
+                command=f"docker inspect {name} >/dev/null 2>&1",
+                description=f"Verify existing container {name} on {host_alias}",
+                timeout=30,
             ))
 
-        # Step 4: Readiness — ensure cluster running + check Web UI
-        worker_names = " ".join(f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1))
+        # Step 1: Readiness — verify Spark master is responding
         steps.append(PlanStep(
             id="readiness-cluster-health",
             kind="framework-readiness",
             hostRef=master_host,
-            command=(
-                f"docker exec pyspark-spark-master curl -sf http://localhost:8080/json/ >/dev/null || "
-                f"{{ echo 'Spark not responding, restarting cluster...'; "
-                f"docker restart pyspark-spark-master {worker_names}; sleep 10; "
-                f"docker exec pyspark-spark-master curl -sf http://localhost:8080/json/; }}"
-            ),
-            description=f"Start cluster if stopped, then check health on {host_alias}",
+            command="docker exec pyspark-spark-master curl -sf http://localhost:8080/json/ >/dev/null",
+            description=f"Verify Spark master health on {host_alias}",
             timeout=120,
         ))
 
-        # Step 5: Readiness — verify worker count
+        # Step 2: Readiness — verify worker count
         steps.append(PlanStep(
             id="readiness-worker-count",
             kind="framework-smoke-test",
@@ -177,7 +93,7 @@ class PySparkEnvironmentAdapter:
             timeout=60,
         ))
 
-        # Step 6: Verify profiling tools (installed during image build)
+        # Step 3: Verify profiling tools in existing containers
         profiling_tools = software.get("profilingTools", [])
         if profiling_tools:
             tool_packages = {
@@ -190,7 +106,7 @@ class PySparkEnvironmentAdapter:
             packages = sorted({tool_packages.get(t, t) for t in profiling_tools})
             pkg_str = " ".join(packages)
 
-            for name in ["pyspark-spark-master"] + [f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1)]:
+            for name in expected_containers:
                 steps.append(PlanStep(
                     id=f"verify-profiling-tools-{name}",
                     kind="framework-readiness",
@@ -198,13 +114,12 @@ class PySparkEnvironmentAdapter:
                     command=(
                         f"docker exec {name} bash -c "
                         f"'dpkg -s {pkg_str} >/dev/null 2>&1 "
-                        f"|| echo WARNING: profiling tools not in image, rebuild needed'"
+                        f"|| echo WARNING: profiling tools not in image'"
                     ),
                     description=f"Verify profiling tools in {name} on {host_alias}",
                     required=False,
                 ))
 
-            # Step 7: Verify profiling tools availability
             verify_cmds = {
                 "perf": "perf --version",
                 "strace": "strace --version",
@@ -222,19 +137,6 @@ class PySparkEnvironmentAdapter:
                 command=f"docker exec pyspark-spark-master bash -c '{verifications}'",
                 description=f"Verify profiling tools available on {host_alias}",
             ))
-
-            # Step 8: Enable perf_event_paranoid on host
-            if "perf" in profiling_tools:
-                steps.append(PlanStep(
-                    id="enable-perf-paranoid",
-                    kind="prepare",
-                    hostRef=master_host,
-                    command="sudo sysctl -w kernel.perf_event_paranoid=0",
-                    description=f"Set kernel.perf_event_paranoid=0 on {host_alias}",
-                    requiresPrivilege=True,
-                    requiresApproval=True,
-                    rollbackHint="sudo sysctl -w kernel.perf_event_paranoid=2",
-                ))
 
         return steps
 
