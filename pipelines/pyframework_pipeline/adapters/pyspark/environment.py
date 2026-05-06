@@ -53,7 +53,8 @@ class PySparkEnvironmentAdapter:
 
         master_host = hosts_by_role.get("master", hosts_by_role.get("client", ""))
         host_alias = host_refs.get(master_host, {}).get("alias", master_host)
-        host_env = host_refs.get(master_host, {}).get("env", {})
+        raw_host_env = host_refs.get(master_host, {}).get("env", {})
+        host_env = raw_host_env if isinstance(raw_host_env, dict) else {}
 
         # Build docker exec proxy flags
         _proxy_vars = ["http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
