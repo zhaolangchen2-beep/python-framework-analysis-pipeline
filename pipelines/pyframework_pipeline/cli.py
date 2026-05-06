@@ -437,7 +437,8 @@ def _cmd_env_plan(args) -> int:
         return 1
 
     env_config = load_environment_yaml(env_yaml_path)
-    framework = env_config.get("framework", "")
+    project_config = load_project_config(project_path)
+    framework = project_config.get("frameworkId", "pyflink")
 
     try:
         adapter = _load_adapter(framework)

@@ -110,6 +110,7 @@ def generate_plan(
 
     # Resolve project ID from project.yaml
     project_id = _read_project_id(project_yaml_path)
+    framework_id = _read_framework_id(project_yaml_path)
 
     # Find the target platform config
     platform_config = _find_platform(env_config, platform)
@@ -123,7 +124,7 @@ def generate_plan(
     # Build plan
     plan = EnvironmentPlan(
         projectId=project_id,
-        framework=env_config["framework"],
+        framework=framework_id,
         platform=platform,
         mode=env_config.get("mode", "plan-only"),
     )
@@ -211,6 +212,15 @@ def _read_project_id(project_yaml_path: Path) -> str:
         if stripped.startswith("id:"):
             return stripped.split(":", 1)[1].strip().strip('"').strip("'")
     raise ValueError(f"Cannot find 'id' in {project_yaml_path}")
+
+
+def _read_framework_id(project_yaml_path: Path) -> str:
+    """Read the framework ID from project.yaml."""
+    for line in project_yaml_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("frameworkId:"):
+            return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+    return "pyflink"
 
 
 def _compute_hash(plan_dict: dict[str, Any]) -> str:
