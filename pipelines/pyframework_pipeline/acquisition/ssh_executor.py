@@ -31,7 +31,7 @@ class SshExecutor:
         self.user = user
         self.key = key
         self.port = port
-        self.env: dict[str, str] = env or {}
+        self.env: dict[str, str] = env if isinstance(env, dict) else {}
 
     def _build_ssh_args(self, command: str) -> list[str]:
         args = ["ssh"]
