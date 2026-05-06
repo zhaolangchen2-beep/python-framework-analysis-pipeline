@@ -91,16 +91,17 @@ def deploy_plan(
             },
             "record": record,
         }
-    from ..config import load_environment_config
+    from ..config import load_environment_config, load_project_config
     from .planning import generate_plan
 
     env_config = load_environment_config(project_path)
+    project_config = load_project_config(project_path / "project.yaml")
 
     # Load or generate plan.
     if plan_path and plan_path.exists():
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     else:
-        framework = env_config.get("framework", "")
+        framework = project_config.get("frameworkId", "pyflink")
         from ..cli import _load_adapter
         adapter = _load_adapter(framework)
         plan = generate_plan(project_path, platform_id, adapter)
