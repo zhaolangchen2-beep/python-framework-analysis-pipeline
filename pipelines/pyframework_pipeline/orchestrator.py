@@ -478,7 +478,7 @@ def _run_benchmark_pyspark(
     host_ref = get_platform_host_ref(env_config, platform)
     executor = build_executor(host_ref, env_config)
     fw_config = get_framework_config(project_path)
-    python_bin = _find_container_python(executor, env_config)
+    python_bin = _find_container_python(executor, env_config, container=fw_config.master_container)
 
     platform_run_dir = run_dir / platform
     platform_run_dir.mkdir(parents=True, exist_ok=True)
@@ -508,9 +508,25 @@ def _run_benchmark_pyspark(
         # Set up perf recording
         logger.info("[5a] Deploying perf wrapper on %s...", platform)
         tm_count = _parse_tm_count(env_config)
-        _ensure_container_perf(executor, tm_count, include_jm=True)
-        perf_binary = _find_container_perf(executor)
-        _deploy_perf_wrapper(executor, tm_count, python_bin, perf_binary, include_jm=True)
+        _ensure_container_perf(
+            executor,
+            tm_count,
+            include_jm=True,
+            master_container=master_container,
+            worker_containers=fw_config.get_worker_containers(count=tm_count),
+            perf_data_path=fw_config.get_perf_data_path(),
+        )
+        perf_binary = _find_container_perf(executor, container=master_container)
+        _deploy_perf_wrapper(
+            executor,
+            tm_count,
+            python_bin,
+            perf_binary,
+            include_jm=True,
+            master_container=master_container,
+            worker_containers=fw_config.get_worker_containers(count=tm_count),
+            perf_data_path=fw_config.get_perf_data_path(),
+        )
 
         # Run each query using collect_results.py in spark-master
         master_container = fw_config.master_container
@@ -772,12 +788,16 @@ def _ensure_container_perf(
     executor: "SshExecutor",
     tm_count: int,
     include_jm: bool = False,
+    *,
+    master_container: str = "flink-jm",
+    worker_containers: list[str] | None = None,
+    perf_data_path: str = "/tmp/perf-udf.data",
 ) -> str:
     """Verify perf is available in containers (installed during image build)."""
     containers = []
     if include_jm:
-        containers.append("flink-jm")
-    containers.extend(f"flink-tm{i}" for i in range(1, tm_count + 1))
+        containers.append(master_container)
+    containers.extend(worker_containers or [f"flink-tm{i}" for i in range(1, tm_count + 1)])
 
     for c in containers:
         check = executor.run(
@@ -787,13 +807,13 @@ def _ensure_container_perf(
         )
         if check.returncode != 0 or not check.stdout.strip():
             raise StepError(
-                f"perf not found in {c}. linux-tools must be installed "
-                f"during image build (build-flink-image.sh Phase 5).\n"
+                f"perf not found in {c}. linux-tools must be installed in the target container image.\n"
                 f"  stdout: {check.stdout[:500]}\n"
                 f"  stderr: {check.stderr[:500]}"
             )
+    probe_container = (worker_containers or [f"flink-tm{i}" for i in range(1, tm_count + 1)])[0]
     return executor.run(
-        "docker exec flink-tm1 bash -c "
+        f"docker exec {probe_container} bash -c "
         "'ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
         timeout=30,
     ).stdout.strip()
@@ -922,21 +942,22 @@ def _merge_wall_clock_times(
 def _find_container_python(
     executor: "SshExecutor",
     env_config: dict | None = None,
+    *,
+    container: str = "flink-jm",
 ) -> str:
-    """Find the Python binary path inside the JM container."""
+    """Find the Python binary path inside the target master container."""
     py_version = "3.14.3"
     if env_config:
         py_version = env_config.get("software", {}).get("pythonVersion", py_version)
     expected = f"/root/.pyenv/versions/{py_version}/bin/python3"
     result = executor.run(
-        f"docker exec flink-jm ls {expected}",
+        f"docker exec {container} ls {expected}",
         timeout=15,
     )
     if result.returncode == 0 and result.stdout.strip():
         return expected
-    # Fallback: find any pyenv python3.
     result = executor.run(
-        "docker exec flink-jm bash -c "
+        f"docker exec {container} bash -c "
         "'ls /root/.pyenv/versions/*/bin/python3 2>/dev/null | sort -V | tail -1'",
         timeout=15,
     )
@@ -968,16 +989,19 @@ def _ensure_jar(executor: "SshExecutor") -> None:
         )
 
 
-def _find_container_perf(executor: "SshExecutor") -> str:
-    """Find the perf binary path inside the TM container."""
+def _find_container_perf(
+    executor: "SshExecutor",
+    *,
+    container: str = "flink-tm1",
+) -> str:
+    """Find the perf binary path inside the target container."""
     result = executor.run(
-        "docker exec flink-tm1 bash -c "
+        f"docker exec {container} bash -c "
         "'ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
         timeout=30,
     )
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
-    # Fallback to /usr/bin/perf.
     return "/usr/bin/perf"
 
 
@@ -987,6 +1011,10 @@ def _deploy_perf_wrapper(
     python_bin: str,
     perf_binary: str,
     include_jm: bool = False,
+    *,
+    master_container: str = "flink-jm",
+    worker_containers: list[str] | None = None,
+    perf_data_path: str = "/tmp/perf-udf.data",
 ) -> None:
     """Deploy perf wrapper script to containers.
 
@@ -1007,18 +1035,18 @@ def _deploy_perf_wrapper(
         "export MKL_NUM_THREADS=1\n"
         "export NUMEXPR_NUM_THREADS=1\n"
         f"exec {perf_binary} record -F 999 -g -e task-clock "
-        f"-o /tmp/perf-udf.data -- {python_bin} \"$@\" 2>/dev/null\n"
+        f"-o {perf_data_path} -- {python_bin} \"$@\" 2>/dev/null\n"
     )
     encoded = base64.b64encode(script.encode()).decode()
 
     wrapper_path = "/tmp/_perf_python_wrapper.sh"
     containers = []
     if include_jm:
-        containers.append("flink-jm")
-    containers.extend(f"flink-tm{i}" for i in range(1, tm_count + 1))
+        containers.append(master_container)
+    containers.extend(worker_containers or [f"flink-tm{i}" for i in range(1, tm_count + 1)])
     for c in containers:
         executor.run(
-            f"docker exec {c} rm -f /tmp/perf-udf.data",
+            f"docker exec {c} rm -f {perf_data_path}",
             timeout=30,
         )
         executor.run(
