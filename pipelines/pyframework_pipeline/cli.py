@@ -10,6 +10,12 @@ def _schemas_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "schemas"
 
 
+def _resolve_project_yaml(path: Path) -> Path:
+    if path.is_dir():
+        return path / "project.yaml"
+    return path
+
+
 def _load_adapter(framework: str):
     if framework == "pyflink":
         from .adapters.pyflink.environment import PyFlinkEnvironmentAdapter
@@ -332,7 +338,7 @@ def _cmd_config_validate(args) -> int:
     from .config import validate_pipeline_config
 
     result = validate_pipeline_config(
-        Path(args.project),
+        _resolve_project_yaml(Path(args.project)),
         require_bridge_token=not args.skip_bridge_token,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -353,7 +359,7 @@ def _cmd_run(args) -> int:
     )
     from .config import get_run_config, load_project_config, validate_pipeline_config
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     config_report = validate_pipeline_config(
         project_path,
         require_bridge_token=_run_requires_bridge_token(args.stop_before),
@@ -424,7 +430,7 @@ def _cmd_env_plan(args) -> int:
     from .environment.parser import load_environment_yaml
     from .environment.planning import generate_plan
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     env_yaml_path = project_path.parent / "environment.yaml"
     if not env_yaml_path.exists():
         print(f"Error: environment.yaml not found at {env_yaml_path}", file=sys.stderr)
@@ -459,7 +465,7 @@ def _cmd_env_plan(args) -> int:
 def _cmd_env_deploy(args) -> int:
     from .environment.deploy import deploy_plan
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     plan_path = Path(args.plan) if args.plan else None
     output_dir = Path(args.output) if args.output else None
 
@@ -472,7 +478,7 @@ def _cmd_env_deploy(args) -> int:
 def _cmd_env_teardown(args) -> int:
     from .environment.deploy import teardown
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     result = teardown(project_path, args.platform, yes=args.yes)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") != "failed" else 1
@@ -505,7 +511,7 @@ def _handle_workload(args) -> int:
 def _cmd_workload_deploy(args) -> int:
     from .orchestrator import _run_workload_deploy
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     try:
         _run_workload_deploy(project_path, Path("/tmp/run"), args.platform, yes=False)
         print(json.dumps({"status": "deployed", "platform": args.platform}))
@@ -529,7 +535,7 @@ def _cmd_benchmark_run(args) -> int:
     from .orchestrator import _run_benchmark
     from .config import load_project_config
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     run_dir = Path(args.run_dir) if args.run_dir else project_path.parent / "runs" / _now_date_str()
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -555,7 +561,7 @@ def _handle_collect(args) -> int:
 def _cmd_collect_run(args) -> int:
     from .orchestrator import _run_collect
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     run_dir = Path(args.run_dir)
 
     try:
@@ -586,7 +592,7 @@ def _handle_acquire(args) -> int:
 
 
 def _resolve_run_dir(args) -> Path:
-    project_dir = Path(args.project).resolve().parent
+    project_dir = _resolve_project_yaml(Path(args.project)).resolve().parent
     run_dir = Path(args.run_dir)
     if not run_dir.is_absolute():
         run_dir = project_dir / run_dir
@@ -746,7 +752,7 @@ def _handle_backfill(args) -> int:
 def _cmd_backfill_run(args) -> int:
     from .backfill.pipeline import run_backfill
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     if not project_path.exists():
         print(f"Error: {project_path} not found", file=sys.stderr)
         return 1
@@ -761,7 +767,7 @@ def _cmd_backfill_run(args) -> int:
 def _cmd_backfill_status(args) -> int:
     from .config import resolve_four_layer_root
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     root = resolve_four_layer_root(project_path)
 
     info: dict = {"project": str(project_path), "fourLayerRoot": str(root)}
@@ -806,7 +812,7 @@ def _resolve_bridge_config(args):
     """Get bridge config from project.yaml, with CLI overrides."""
     from .config import load_project_config
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     try:
         full_config = load_project_config(project_path)
     except (FileNotFoundError, ValueError):
@@ -849,7 +855,7 @@ def _resolve_bridge_config(args):
 def _cmd_bridge_publish(args) -> int:
     from .bridge.analysis import publish
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     if not project_path.exists():
         print(f"Error: {project_path} not found", file=sys.stderr)
         return 1
@@ -881,7 +887,7 @@ def _cmd_bridge_publish(args) -> int:
 def _cmd_bridge_fetch(args) -> int:
     from .bridge.analysis import fetch
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     if not project_path.exists():
         print(f"Error: {project_path} not found", file=sys.stderr)
         return 1
@@ -910,7 +916,7 @@ def _cmd_bridge_fetch(args) -> int:
 def _cmd_bridge_status(args) -> int:
     from .bridge.analysis import status
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     if not project_path.exists():
         print(f"Error: {project_path} not found", file=sys.stderr)
         return 1
@@ -927,7 +933,7 @@ def _cmd_bridge_status(args) -> int:
 def _cmd_compare(args) -> int:
     from .compare.pipeline import run_compare
 
-    project_path = Path(args.project)
+    project_path = _resolve_project_yaml(Path(args.project))
     if not project_path.exists():
         print(f"Error: {project_path} not found", file=sys.stderr)
         return 1
