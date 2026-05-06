@@ -38,7 +38,7 @@ def collect_pyspark_asm(
 
     # Collect assembly from each Spark worker container
     container_asms = {}
-    workers = ["spark-master", "spark-worker-1", "spark-worker-2"]
+    workers = ["pyspark-spark-master", "pyspark-spark-worker-1", "pyspark-spark-worker-2"]
 
     for container in workers:
         asm_file = asm_dir / f"{container}-dump.s"

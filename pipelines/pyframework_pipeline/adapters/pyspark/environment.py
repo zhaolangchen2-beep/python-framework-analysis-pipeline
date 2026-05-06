@@ -99,7 +99,7 @@ class PySparkEnvironmentAdapter:
 
         # Step 2: Start Master
         master_run_args = (
-            f"docker run -d --name spark-master --network {network} "
+            f"docker run -d --name pyspark-spark-master --network {network} "
             f"-p 8080:8080 -p 7077:7077 --privileged {image} "
             f"/opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
         )
@@ -108,14 +108,14 @@ class PySparkEnvironmentAdapter:
             kind="framework-start",
             hostRef=master_host,
             command=_docker_reconcile_container(
-                name="spark-master",
+                name="pyspark-spark-master",
                 image=image,
                 run_args=master_run_args,
             ),
             description=f"Start Spark Master container on {host_alias}",
             mutatesHost=True,
             requiresApproval=True,
-            rollbackHint="docker rm -f spark-master",
+            rollbackHint="docker rm -f pyspark-spark-master",
         ))
 
         # Step 3: Start Workers
@@ -125,32 +125,32 @@ class PySparkEnvironmentAdapter:
                 kind="framework-start",
                 hostRef=master_host,
                 command=_docker_reconcile_container(
-                    name=f"spark-worker-{i}",
+                    name=f"pyspark-spark-worker-{i}",
                     image=image,
                     run_args=(
-                        f"docker run -d --name spark-worker-{i} --network {network} "
+                        f"docker run -d --name pyspark-spark-worker-{i} --network {network} "
                         f"--privileged {image} "
                         f"/opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker "
-                        f"spark://spark-master:7077"
+                        f"spark://pyspark-spark-master:7077"
                     ),
                 ),
                 description=f"Start Worker {i} container on {host_alias}",
                 mutatesHost=True,
                 requiresApproval=True,
-                rollbackHint=f"docker rm -f spark-worker-{i}",
+                rollbackHint=f"docker rm -f pyspark-spark-worker-{i}",
             ))
 
         # Step 4: Readiness — ensure cluster running + check Web UI
-        worker_names = " ".join(f"spark-worker-{i}" for i in range(1, worker_count + 1))
+        worker_names = " ".join(f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1))
         steps.append(PlanStep(
             id="readiness-cluster-health",
             kind="framework-readiness",
             hostRef=master_host,
             command=(
-                f"docker exec spark-master curl -sf http://localhost:8080/json/ >/dev/null || "
+                f"docker exec pyspark-spark-master curl -sf http://localhost:8080/json/ >/dev/null || "
                 f"{{ echo 'Spark not responding, restarting cluster...'; "
-                f"docker restart spark-master {worker_names}; sleep 10; "
-                f"docker exec spark-master curl -sf http://localhost:8080/json/; }}"
+                f"docker restart pyspark-spark-master {worker_names}; sleep 10; "
+                f"docker exec pyspark-spark-master curl -sf http://localhost:8080/json/; }}"
             ),
             description=f"Start cluster if stopped, then check health on {host_alias}",
             timeout=120,
@@ -163,7 +163,7 @@ class PySparkEnvironmentAdapter:
             hostRef=master_host,
             command=(
                 f"for i in \\$(seq 1 10); do "
-                f"count=\\$(docker exec spark-master curl -sf "
+                f"count=\\$(docker exec pyspark-spark-master curl -sf "
                 f"http://localhost:8080/json/ | "
                 f"python3 -c 'import sys,json; "
                 f"d=json.load(sys.stdin); print(len(d.get(\"workers\",[])))'); "
@@ -189,7 +189,7 @@ class PySparkEnvironmentAdapter:
             packages = sorted({tool_packages.get(t, t) for t in profiling_tools})
             pkg_str = " ".join(packages)
 
-            for name in ["spark-master"] + [f"spark-worker-{i}" for i in range(1, worker_count + 1)]:
+            for name in ["pyspark-spark-master"] + [f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1)]:
                 steps.append(PlanStep(
                     id=f"verify-profiling-tools-{name}",
                     kind="framework-readiness",
@@ -218,7 +218,7 @@ class PySparkEnvironmentAdapter:
                 id="verify-profiling-tools",
                 kind="framework-readiness",
                 hostRef=master_host,
-                command=f"docker exec spark-master bash -c '{verifications}'",
+                command=f"docker exec pyspark-spark-master bash -c '{verifications}'",
                 description=f"Verify profiling tools available on {host_alias}",
             ))
 

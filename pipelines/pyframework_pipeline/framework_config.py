@@ -32,13 +32,13 @@ class FrameworkConfig:
     def master_container(self) -> str:
         """Name of the master/coordinator container."""
         if self.framework_id == "pyspark":
-            return "spark-master"
+            return "pyspark-spark-master"
         return "flink-jm"
 
     def get_worker_containers(self, count: int = 2) -> list[str]:
         """Names of worker containers."""
         if self.framework_id == "pyspark":
-            return [f"spark-worker-{i}" for i in range(1, count + 1)]
+            return [f"pyspark-spark-worker-{i}" for i in range(1, count + 1)]
         return [f"flink-tm{i}" for i in range(1, count + 1)]
 
     @property
