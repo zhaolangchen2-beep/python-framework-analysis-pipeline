@@ -196,18 +196,27 @@ def validate_pipeline_config(
                     )
 
         software = env_config.get("software", {})
-        pyflink_images = software.get("flinkPyflinkImages", {})
-        if not pyflink_images:
+
+        # Determine framework and select appropriate image field name
+        framework_id = str(project_config.get("frameworkId", "pyflink")) if project_config else "pyflink"
+        if framework_id == "pyspark":
+            framework_images = software.get("sparkImages", {})
+            images_field = "sparkImages"
+        else:
+            framework_images = software.get("flinkPyflinkImages", {})
+            images_field = "flinkPyflinkImages"
+
+        if not framework_images:
             add(
-                "software.flinkPyflinkImages",
-                "environment.yaml missing software.flinkPyflinkImages",
+                f"software.{images_field}",
+                f"environment.yaml missing software.{images_field}",
             )
         else:
             for platform in platforms:
-                if str(platform) not in pyflink_images:
+                if str(platform) not in framework_images:
                     add(
-                        f"software.flinkPyflinkImages.{platform}",
-                        f"missing PyFlink image for platform {platform}",
+                        f"software.{images_field}.{platform}",
+                        f"missing {framework_id} image for platform {platform}",
                     )
 
     bridge = project_config.get("bridge", {}) if project_config else {}

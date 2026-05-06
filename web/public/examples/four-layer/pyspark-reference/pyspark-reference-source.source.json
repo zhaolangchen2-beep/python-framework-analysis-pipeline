@@ -1,0 +1,12 @@
+{
+  "id": "pyspark-reference-source",
+  "schemaVersion": 1,
+  "frameworkId": "pyspark",
+  "repo": {
+    "type": "github",
+    "url": "https://github.com/zhaolangchen2-beep/lang_env"
+  },
+  "sourceFiles": [],
+  "sourceAnchors": [],
+  "artifactIndex": []
+}

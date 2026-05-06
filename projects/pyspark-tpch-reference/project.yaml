@@ -1,0 +1,35 @@
+id: pyspark-tpch-reference
+frameworkId: pyspark
+description: "PySpark TPC-H benchmark analysis reference project"
+fourLayerRoot: four-layer
+
+workload:
+  localDir: workload/tpch/pyspark
+  type: sql
+  queries:
+    - q1
+    - q6
+    - q12
+    - q14
+    - q19
+  rows: 10000000
+
+run:
+  platforms:
+    - x86
+
+software:
+  pythonVersion: "3.11"
+  sparkVersion: "3.5.0"
+  sparkImages:
+    x86: "pyspark:3.5.0-py311"
+  profilingTools:
+    - perf
+    - objdump
+    - strace
+
+bridge:
+  enabled: false
+  tokenEnvVar: PYFRAMEWORK_BRIDGE_TOKEN
+  repo: "your-org/pyspark-analysis"
+  platform: github

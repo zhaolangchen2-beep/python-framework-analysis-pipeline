@@ -5,6 +5,7 @@ import {
   Route,
   Routes,
 } from "react-router-dom";
+import { ProjectProvider } from "./context/ProjectContext";
 import { AppShell } from "./layout/AppShell";
 import { appRoutes } from "./routes";
 
@@ -27,17 +28,15 @@ function AppRoutes() {
 }
 
 export default function App({ useMemoryRouter, initialEntries }: AppProps) {
-  if (useMemoryRouter) {
-    return (
-      <MemoryRouter initialEntries={initialEntries}>
-        <AppRoutes />
-      </MemoryRouter>
-    );
-  }
-
-  return (
+  const router = useMemoryRouter ? (
+    <MemoryRouter initialEntries={initialEntries}>
+      <AppRoutes />
+    </MemoryRouter>
+  ) : (
     <BrowserRouter>
       <AppRoutes />
     </BrowserRouter>
   );
+
+  return <ProjectProvider>{router}</ProjectProvider>;
 }

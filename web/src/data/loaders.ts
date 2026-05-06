@@ -32,64 +32,76 @@ import type {
   StackOverview,
 } from "../types/report";
 
-const DEFAULT_PROJECT_ID = "tpch-pyflink-reference";
+export type ProjectId = "tpch-pyflink-reference" | "pyspark-tpch-reference";
 
-async function loadDefaultAssemblyContext() {
-  return loadAssemblyContext(DEFAULT_PROJECT_ID);
+const DEFAULT_PROJECT_ID: ProjectId = "pyspark-tpch-reference";
+let currentProjectId: ProjectId = DEFAULT_PROJECT_ID;
+
+export function setCurrentProjectId(projectId: ProjectId) {
+  currentProjectId = projectId;
 }
 
-export async function loadExecutiveSummary(): Promise<ExecutiveSummary> {
-  return assembleExecutiveSummaryFromAssembly(await loadDefaultAssemblyContext());
+export function getCurrentProjectId(): ProjectId {
+  return currentProjectId;
 }
 
-export async function loadCaseIndex(): Promise<CaseIndexEntry[]> {
-  return assembleCaseIndexFromAssembly(await loadDefaultAssemblyContext());
+async function loadAssemblyContextForProject(projectId?: ProjectId) {
+  const id = projectId || currentProjectId;
+  return loadAssemblyContext(id);
 }
 
-export async function loadOpportunityRanking(): Promise<OpportunityRankingEntry[]> {
-  return assembleOpportunityRankingFromAssembly(await loadDefaultAssemblyContext());
+export async function loadExecutiveSummary(projectId?: ProjectId): Promise<ExecutiveSummary> {
+  return assembleExecutiveSummaryFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadScopeSummary(): Promise<ScopeSummary> {
-  return assembleScopeSummaryFromAssembly(await loadDefaultAssemblyContext());
+export async function loadCaseIndex(projectId?: ProjectId): Promise<CaseIndexEntry[]> {
+  return assembleCaseIndexFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadStackOverview(): Promise<StackOverview> {
-  return assembleStackOverviewFromAssembly(await loadDefaultAssemblyContext());
+export async function loadOpportunityRanking(projectId?: ProjectId): Promise<OpportunityRankingEntry[]> {
+  return assembleOpportunityRankingFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadRootCauseIndex(): Promise<RootCauseIndexEntry[]> {
-  return assembleRootCauseIndexFromAssembly(await loadDefaultAssemblyContext());
+export async function loadScopeSummary(projectId?: ProjectId): Promise<ScopeSummary> {
+  return assembleScopeSummaryFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadPatternIndex(): Promise<PatternIndexEntry[]> {
-  return assemblePatternIndexFromAssembly(await loadDefaultAssemblyContext());
+export async function loadStackOverview(projectId?: ProjectId): Promise<StackOverview> {
+  return assembleStackOverviewFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadCaseDetail(id: string): Promise<CaseDetail> {
-  return assembleCaseDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadRootCauseIndex(projectId?: ProjectId): Promise<RootCauseIndexEntry[]> {
+  return assembleRootCauseIndexFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadFunctionDetail(id: string): Promise<FunctionDetail> {
-  return assembleFunctionDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadPatternIndex(projectId?: ProjectId): Promise<PatternIndexEntry[]> {
+  return assemblePatternIndexFromAssembly(await loadAssemblyContextForProject(projectId));
 }
 
-export async function loadPatternDetail(id: string): Promise<PatternDetail> {
-  return assemblePatternDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadCaseDetail(id: string, projectId?: ProjectId): Promise<CaseDetail> {
+  return assembleCaseDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
 }
 
-export async function loadRootCauseDetail(id: string): Promise<RootCauseDetail> {
-  return assembleRootCauseDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadFunctionDetail(id: string, projectId?: ProjectId): Promise<FunctionDetail> {
+  return assembleFunctionDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
 }
 
-export async function loadComponentDetail(id: string): Promise<ComponentDetail> {
-  return assembleComponentDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadPatternDetail(id: string, projectId?: ProjectId): Promise<PatternDetail> {
+  return assemblePatternDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
 }
 
-export async function loadCategoryDetail(id: string): Promise<CategoryDetail> {
-  return assembleCategoryDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadRootCauseDetail(id: string, projectId?: ProjectId): Promise<RootCauseDetail> {
+  return assembleRootCauseDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
 }
 
-export async function loadArtifactDetail(id: string): Promise<ArtifactDetail> {
-  return assembleArtifactDetailFromAssembly(await loadDefaultAssemblyContext(), id);
+export async function loadComponentDetail(id: string, projectId?: ProjectId): Promise<ComponentDetail> {
+  return assembleComponentDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
+}
+
+export async function loadCategoryDetail(id: string, projectId?: ProjectId): Promise<CategoryDetail> {
+  return assembleCategoryDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
+}
+
+export async function loadArtifactDetail(id: string, projectId?: ProjectId): Promise<ArtifactDetail> {
+  return assembleArtifactDetailFromAssembly(await loadAssemblyContextForProject(projectId), id);
 }

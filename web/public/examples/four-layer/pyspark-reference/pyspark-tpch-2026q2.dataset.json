@@ -1,0 +1,109 @@
+{
+  "id": "pyspark-tpch-2026q2",
+  "schemaVersion": 1,
+  "name": "PySpark TPC-H 2026Q2",
+  "frameworkId": "pyspark",
+  "projectId": "pyspark-tpch-reference",
+  "cases": [
+    {
+      "caseId": "tpch_q1",
+      "name": "TPC-H Q1 - Pricing Summary Report",
+      "recordCount": 10000000,
+      "resultCount": 10000000,
+      "metrics": {
+        "frameworkOverheadNs": {
+          "batch_total": 2500000000,
+          "per_invocation": 250
+        },
+        "pythonExecutionNs": {
+          "batch_total": 7500000000,
+          "per_invocation": 750
+        },
+        "overheadPercentage": 25.0
+      }
+    },
+    {
+      "caseId": "tpch_q3",
+      "name": "TPC-H Q3 - Shipping Priority",
+      "recordCount": 10000000,
+      "resultCount": 10000000,
+      "metrics": {
+        "frameworkOverheadNs": {
+          "batch_total": 3500000000,
+          "per_invocation": 350
+        },
+        "pythonExecutionNs": {
+          "batch_total": 5500000000,
+          "per_invocation": 550
+        },
+        "overheadPercentage": 38.9
+      }
+    },
+    {
+      "caseId": "tpch_q6",
+      "name": "TPC-H Q6 - Forecasting Revenue Change",
+      "recordCount": 10000000,
+      "resultCount": 10000000,
+      "metrics": {
+        "frameworkOverheadNs": {
+          "batch_total": 4200000000,
+          "per_invocation": 420
+        },
+        "pythonExecutionNs": {
+          "batch_total": 4800000000,
+          "per_invocation": 480
+        },
+        "overheadPercentage": 46.7
+      }
+    },
+    {
+      "caseId": "tpch_q12",
+      "name": "TPC-H Q12 - Shipping Modes and Order Priority",
+      "recordCount": 10000000,
+      "resultCount": 10000000,
+      "metrics": {
+        "frameworkOverheadNs": {
+          "batch_total": 5000000000,
+          "per_invocation": 500
+        },
+        "pythonExecutionNs": {
+          "batch_total": 5000000000,
+          "per_invocation": 500
+        },
+        "overheadPercentage": 50.0
+      }
+    }
+  ],
+  "functions": [],
+  "stackOverview": {
+    "components": ["jvm_startup", "python_udf_dispatch", "spark_sql_planning", "gc_pause", "object_allocation"],
+    "categories": ["interpreter", "memory", "gc", "object_model", "type_operations", "calls_dispatch", "native_boundary", "kernel"]
+  },
+  "componentDetails": [
+    {"componentId": "jvm_startup", "name": "JVM Startup", "category": "interpreter", "type": "overhead"},
+    {"componentId": "python_udf_dispatch", "name": "Python UDF Dispatch", "category": "calls_dispatch", "type": "overhead"},
+    {"componentId": "spark_sql_planning", "name": "Spark SQL Planning", "category": "interpreter", "type": "overhead"},
+    {"componentId": "gc_pause", "name": "GC Pause", "category": "gc", "type": "overhead"},
+    {"componentId": "object_allocation", "name": "Object Allocation", "category": "memory", "type": "overhead"}
+  ],
+  "categoryDetails": [
+    {"categoryId": "interpreter", "name": "Interpreter", "description": "JVM bytecode interpretation and execution"},
+    {"categoryId": "memory", "name": "Memory", "description": "Memory allocation, deallocation, and management"},
+    {"categoryId": "gc", "name": "GC", "description": "Garbage collection overhead"},
+    {"categoryId": "object_model", "name": "Object Model", "description": "Object creation, field access, and representation"},
+    {"categoryId": "type_operations", "name": "Type Operations", "description": "Type checking, casting, and conversion"},
+    {"categoryId": "calls_dispatch", "name": "Calls / Dispatch", "description": "Method invocation and virtual dispatch"},
+    {"categoryId": "native_boundary", "name": "Native Boundary", "description": "JNI calls and Python-Java interop"},
+    {"categoryId": "kernel", "name": "Kernel", "description": "System calls and OS interaction"}
+  ],
+  "patterns": [
+    {"patternId": "balanced_overhead", "name": "Balanced overhead-to-execution ratio", "description": "Framework overhead and execution time are similar", "severity": "medium", "caseIds": ["tpch_q3", "tpch_q6", "tpch_q12"]},
+    {"patternId": "low_overhead", "name": "Low framework overhead", "description": "Framework overhead is minimal relative to execution", "severity": "low", "caseIds": ["tpch_q1"]}
+  ],
+  "rootCauses": [
+    {"rootCauseId": "jvm_startup", "name": "JVM Startup Latency", "description": "Initial JVM startup time impacts short-running queries", "category": "interpreter", "severity": "medium", "evidence": "Consistent per-invocation overhead even for minimal queries"},
+    {"rootCauseId": "python_boundary", "name": "Python-Java Boundary Crossing", "description": "JNI/JPype overhead for each Python UDF invocation", "category": "native_boundary", "severity": "high", "evidence": "High per-invocation overhead in Python UDF benchmarks"},
+    {"rootCauseId": "gc_pressure", "name": "Garbage Collection Pressure", "description": "GC pauses accumulate with large data volumes", "category": "gc", "severity": "medium", "evidence": "Increasing overhead ratio with larger row counts"},
+    {"rootCauseId": "dispatch_overhead", "name": "Method Dispatch Overhead", "description": "Virtual method dispatch in Spark SQL planning and execution", "category": "calls_dispatch", "severity": "low", "evidence": "Consistent baseline overhead across all queries"}
+  ]
+}

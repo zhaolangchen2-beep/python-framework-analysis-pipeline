@@ -1,0 +1,17 @@
+{
+  "id": "pyspark-tpch-2026q2",
+  "schemaVersion": 1,
+  "name": "PySpark TPC-H 2026Q2",
+  "frameworkId": "pyspark",
+  "projectId": "pyspark-tpch-reference",
+  "cases": [],
+  "functions": [],
+  "stackOverview": {
+    "components": [],
+    "categories": []
+  },
+  "componentDetails": [],
+  "categoryDetails": [],
+  "patterns": [],
+  "rootCauses": []
+}

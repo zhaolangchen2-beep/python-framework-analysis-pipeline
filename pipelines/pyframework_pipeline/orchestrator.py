@@ -376,6 +376,7 @@ def _run_workload_deploy(
     project_path: Path, run_dir: Path, platform: str, *, yes: bool = False,
 ) -> None:
     from .config import get_workload_config, load_environment_config
+    from .framework_config import get_framework_config
     from .remote import build_executor, get_platform_host_ref
 
     workload = get_workload_config(project_path)
@@ -387,6 +388,7 @@ def _run_workload_deploy(
     env_config = load_environment_config(project_path)
     host_ref = get_platform_host_ref(env_config, platform)
     executor = build_executor(host_ref, env_config)
+    fw_config = get_framework_config(project_path)
 
     # Upload workload to remote host staging.
     remote_dir = "/tmp/pyframework-workload"
@@ -401,59 +403,203 @@ def _run_workload_deploy(
     # Distribute to containers via docker cp.
     # docker cp writes as root; chown to the container user so subsequent
     # operations (build.sh, perf-kits, etc.) can access the files.
-    jm_result = executor.run(f"docker cp {remote_dir}/. flink-jm:/opt/flink/usrlib")
-    if jm_result.returncode != 0:
+    master_container = fw_config.master_container
+    master_workdir = fw_config.master_workdir
+
+    master_result = executor.run(f"docker cp {remote_dir}/. {master_container}:{master_workdir}")
+    if master_result.returncode != 0:
         raise StepError(
-            f"Failed to copy workload to JM (exit {jm_result.returncode}):\n"
-            f"  Command: docker cp {remote_dir}/. flink-jm:/opt/flink/usrlib\n"
-            f"  stdout: {jm_result.stdout[:500]}\n"
-            f"  stderr: {jm_result.stderr[:500]}"
+            f"Failed to copy workload to {master_container} (exit {master_result.returncode}):\n"
+            f"  Command: docker cp {remote_dir}/. {master_container}:{master_workdir}\n"
+            f"  stdout: {master_result.stdout[:500]}\n"
+            f"  stderr: {master_result.stderr[:500]}"
         )
+
+    # Determine chown user based on framework
+    chown_user = "root:root" if fw_config.framework_id == "pyspark" else "flink:flink"
     executor.run(
-        "docker exec -u root flink-jm chown -R flink:flink /opt/flink/usrlib",
+        f"docker exec -u root {master_container} chown -R {chown_user} {master_workdir}",
         timeout=15,
     )
 
-    for i in range(1, 3):  # tm1, tm2
-        tm_result = executor.run(
-            f"docker cp {remote_dir}/. flink-tm{i}:/opt/flink/usrlib"
+    # Distribute to worker containers
+    worker_containers = fw_config.get_worker_containers(count=2)
+    for worker_container in worker_containers:
+        worker_workdir = fw_config.worker_workdir
+        worker_result = executor.run(
+            f"docker cp {remote_dir}/. {worker_container}:{worker_workdir}"
         )
-        if tm_result.returncode != 0:
+        if worker_result.returncode != 0:
             raise StepError(
-                f"Failed to copy workload to TM{i} (exit {tm_result.returncode}):\n"
-                f"  Command: docker cp {remote_dir}/. flink-tm{i}:/opt/flink/usrlib\n"
-                f"  stdout: {tm_result.stdout[:500]}\n"
-                f"  stderr: {tm_result.stderr[:500]}"
+                f"Failed to copy workload to {worker_container} (exit {worker_result.returncode}):\n"
+                f"  Command: docker cp {remote_dir}/. {worker_container}:{worker_workdir}\n"
+                f"  stdout: {worker_result.stdout[:500]}\n"
+                f"  stderr: {worker_result.stderr[:500]}"
             )
         executor.run(
-            f"docker exec -u root flink-tm{i} chown -R flink:flink /opt/flink/usrlib",
+            f"docker exec -u root {worker_container} chown -R {chown_user} {worker_workdir}",
             timeout=15,
         )
 
-    # Build JAR inside container if missing (after docker cp so source files are in place).
-    build_sh = local_dir / "java-udf" / "build.sh"
-    jar_name = "FlinkDemo-1.0-SNAPSHOT.jar"
-    jar_local = local_dir / "java-udf" / jar_name
-    if build_sh.exists() and not jar_local.exists():
-        logger.info("JAR not found locally, building inside container...")
-        result = executor.run(
-            f"docker exec flink-jm bash -c "
-            f"'cd /opt/flink/usrlib/java-udf && bash build.sh'",
-            timeout=120,
-            stream=True,
-        )
-        if result.returncode != 0:
-            raise StepError(
-                f"Container build failed (exit {result.returncode}):\n"
-                f"  Command: docker exec flink-jm bash -c 'cd /opt/flink/usrlib/java-udf && bash build.sh'\n"
-                f"  output: {result.stdout[-2000:]}"
+    # Build JAR inside container if missing (only for PyFlink).
+    if fw_config.framework_id == "pyflink":
+        build_sh = local_dir / "java-udf" / "build.sh"
+        jar_name = "FlinkDemo-1.0-SNAPSHOT.jar"
+        jar_local = local_dir / "java-udf" / jar_name
+        if build_sh.exists() and not jar_local.exists():
+            logger.info("JAR not found locally, building inside container...")
+            result = executor.run(
+                f"docker exec {master_container} bash -c "
+                f"'cd {master_workdir}/java-udf && bash build.sh'",
+                timeout=120,
+                stream=True,
             )
+            if result.returncode != 0:
+                raise StepError(
+                    f"Container build failed (exit {result.returncode}):\n"
+                    f"  Command: docker exec {master_container} bash -c 'cd {master_workdir}/java-udf && bash build.sh'\n"
+                    f"  output: {result.stdout[-2000:]}"
+                )
+
+
+def _run_benchmark_pyspark(
+    project_path: Path, run_dir: Path, platform: str,
+    *, force: bool = False,
+) -> None:
+    """Run PySpark benchmark using collect_results.py wrapper."""
+    from .config import get_workload_config, load_environment_config
+    from .framework_config import get_framework_config
+    from .remote import build_executor, get_platform_host_ref
+
+    workload = get_workload_config(project_path)
+    queries = workload.get("queries", [])
+    rows = workload.get("rows", 10_000_000)
+    env_config = load_environment_config(project_path)
+    host_ref = get_platform_host_ref(env_config, platform)
+    executor = build_executor(host_ref, env_config)
+    fw_config = get_framework_config(project_path)
+    python_bin = _find_container_python(executor, env_config)
+
+    platform_run_dir = run_dir / platform
+    platform_run_dir.mkdir(parents=True, exist_ok=True)
+    timing_path = platform_run_dir / "timing" / "timing-normalized.json"
+
+    # When resuming, re-deploy workload
+    if force:
+        _run_workload_deploy(project_path, run_dir, platform)
+        removed = []
+        for old in [
+            platform_run_dir / "timing" / "timing-normalized.json",
+            platform_run_dir / "perf" / "data" / f"perf-{platform}.data",
+        ]:
+            if old.exists():
+                old.unlink()
+                removed.append(old.relative_to(run_dir))
+        if removed:
+            logger.info("[5a] Force: removed old artifacts: %s", removed)
+
+    # Run benchmark with perf
+    if timing_path.exists() and timing_path.stat().st_size > 0:
+        logger.info("[5a] timing-normalized.json exists, skipping benchmark on %s", platform)
+    else:
+        if not queries:
+            raise StepError("No queries configured")
+
+        # Set up perf recording
+        logger.info("[5a] Deploying perf wrapper on %s...", platform)
+        tm_count = _parse_tm_count(env_config)
+        _ensure_container_perf(executor, tm_count, include_jm=True)
+        perf_binary = _find_container_perf(executor)
+        _deploy_perf_wrapper(executor, tm_count, python_bin, perf_binary, include_jm=True)
+
+        # Run each query using collect_results.py in spark-master
+        master_container = fw_config.master_container
+        master_workdir = fw_config.master_workdir
+
+        for query in queries:
+            logger.info("[5a] Running query %s on %s...", query, platform)
+            timing_output_dir = platform_run_dir / "timing"
+            timing_output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Execute collect_results.py in spark-master container
+            result = executor.run(
+                f"docker exec {master_container} {python_bin} "
+                f"{master_workdir}/collect_results.py "
+                f"--query {query} --rows {rows} "
+                f"--output-dir /opt/spark/work-dir/timing",
+                timeout=300,
+                stream=True,
+            )
+            if result.returncode != 0:
+                raise StepError(
+                    f"Benchmark {query} failed (exit {result.returncode}):\n"
+                    f"  Command: docker exec {master_container} {python_bin} "
+                    f"{master_workdir}/collect_results.py --query {query} --rows {rows}\n"
+                    f"  output: {result.stdout[-2000:]}"
+                )
+
+            logger.info("  %s: completed", query)
+
+            # Copy timing results from container
+            executor.run(
+                f"docker cp {master_container}:/opt/spark/work-dir/timing/timing-normalized.json "
+                f"{timing_output_dir}/timing-normalized.json",
+                timeout=30,
+            )
+
+            # Collect logs from master and workers
+            master_logs = executor.docker_logs(master_container, tail=200)
+            (platform_run_dir / "tm-stdout-master.log").write_text(master_logs, encoding="utf-8")
+
+            worker_containers = fw_config.get_worker_containers(count=tm_count)
+            for i, worker_container in enumerate(worker_containers, 1):
+                logs = executor.docker_logs(worker_container, tail=50)
+                (platform_run_dir / f"tm-stdout-worker-{i}.log").write_text(logs, encoding="utf-8")
+
+        # Verify perf.data was created
+        perf_data_path = fw_config.get_perf_data_path()
+        perf_check = None
+        perf_container = None
+        containers_to_check = [master_container] + fw_config.get_worker_containers(count=tm_count)
+        for c in containers_to_check:
+            check = executor.run(
+                f"docker exec {c} bash -c 'ls -lh {perf_data_path} 2>&1'",
+                timeout=15,
+            )
+            if check.returncode == 0 and "No such file" not in check.stdout:
+                perf_check = check
+                perf_container = c
+                break
+        if perf_check is None:
+            logger.warning(
+                "[5a] perf.data was not found in any container after "
+                "running %d queries. This may be expected if perf wrapper setup failed.",
+                len(queries)
+            )
+        else:
+            logger.info("[5a] perf.data verified in %s: %s", perf_container, perf_check.stdout.strip())
+
+        # Collect ASM from worker containers
+        logger.info("[5b] Collecting ASM from PySpark workers...")
+        _collect_pyspark_asm(executor, platform_run_dir, fw_config, tm_count)
 
 
 def _run_benchmark(
     project_path: Path, run_dir: Path, platform: str,
     *, force: bool = False,
 ) -> None:
+    from .framework_config import get_framework_config
+    from .config import get_workload_config, load_environment_config
+    from .remote import build_executor, get_platform_host_ref
+
+    fw_config = get_framework_config(project_path)
+
+    # Dispatch to framework-specific implementation
+    if fw_config.framework_id == "pyspark":
+        _run_benchmark_pyspark(project_path, run_dir, platform, force=force)
+        return
+
+    # Original PyFlink implementation
     import time
 
     from .config import get_workload_config, load_environment_config
@@ -1693,3 +1839,96 @@ def _print_resume_hint(
         f"  pyframework-pipeline run {project_path} --resume-from {step_id}",
         file=sys.stderr,
     )
+
+
+def _collect_pyspark_asm(
+    executor: "SshExecutor",
+    platform_run_dir: Path,
+    fw_config,
+    worker_count: int,
+) -> None:
+    """Collect and parse assembly from PySpark worker containers.
+
+    Extracts JVM bytecode and maps to framework taxonomy categories.
+    """
+    import json as _json
+
+    asm_dir = platform_run_dir / "asm"
+    asm_dir.mkdir(parents=True, exist_ok=True)
+
+    master_container = fw_config.master_container
+    worker_containers = fw_config.get_worker_containers(count=worker_count)
+
+    # Collect perf report or objdump output from each container
+    collected_containers = []
+    for container in [master_container] + worker_containers:
+        try:
+            # Try to extract perf report output
+            result = executor.run(
+                f"docker exec {container} bash -c "
+                f"'perf report -i /tmp/perf-worker.data --stdio 2>&1 | head -200'",
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout:
+                asm_file = asm_dir / f"{container}-asm.txt"
+                asm_file.write_text(result.stdout, encoding="utf-8")
+                collected_containers.append(container)
+                logger.info("[5b] Collected ASM from %s (%d lines)", container, len(result.stdout.splitlines()))
+        except Exception as e:
+            logger.warning("[5b] Failed to collect ASM from %s: %s", container, e)
+
+    if not collected_containers:
+        logger.warning("[5b] No ASM data collected from any container")
+        return
+
+    # Parse and categorize the assembly data
+    asm_summary = {
+        "schemaVersion": 1,
+        "platform": "",
+        "containers": collected_containers,
+        "categories": {
+            "Interpreter": {"count": 0, "samples": []},
+            "Memory": {"count": 0, "samples": []},
+            "GC": {"count": 0, "samples": []},
+            "Object Model": {"count": 0, "samples": []},
+            "Type Operations": {"count": 0, "samples": []},
+            "Calls / Dispatch": {"count": 0, "samples": []},
+            "Native Boundary": {"count": 0, "samples": []},
+            "Kernel": {"count": 0, "samples": []},
+        },
+    }
+
+    # Pattern matching for each category
+    patterns = {
+        "Interpreter": [r"InterpreterRuntime", r"bytecode", r"invoke", r"_dispatch"],
+        "Memory": [r"malloc", r"alloc", r"free", r"heap", r"memory"],
+        "GC": [r"scavenge", r"mark_sweep", r"GC", r"CollectedHeap"],
+        "Object Model": [r"Klass", r"oopDesc", r"instanceKlass", r"field"],
+        "Type Operations": [r"cast", r"isinstance", r"checkcast", r"Type::"],
+        "Calls / Dispatch": [r"vtable", r"itable", r"method_entry", r"LinkResolver"],
+        "Native Boundary": [r"jni", r"native", r"JNI_", r"entry_point"],
+        "Kernel": [r"syscall", r"sys_", r"mmap", r"futex", r"epoll"],
+    }
+
+    import re as _re
+
+    # Process collected ASM files
+    for asm_file in asm_dir.glob("*-asm.txt"):
+        content = asm_file.read_text(encoding="utf-8", errors="ignore")
+        for line in content.splitlines():
+            # Try to categorize the line
+            for category, pattern_list in patterns.items():
+                if any(_re.search(p, line, _re.IGNORECASE) for p in pattern_list):
+                    asm_summary["categories"][category]["count"] += 1
+                    if len(asm_summary["categories"][category]["samples"]) < 5:
+                        # Keep up to 5 sample lines per category
+                        asm_summary["categories"][category]["samples"].append(line.strip()[:100])
+                    break
+
+    # Write summary
+    asm_summary_file = asm_dir / "asm-summary.json"
+    asm_summary_file.write_text(
+        _json.dumps(asm_summary, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    logger.info("[5b] ASM summary written to %s", asm_summary_file.relative_to(platform_run_dir.parent))

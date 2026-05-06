@@ -1,0 +1,36 @@
+# PySpark Spark cluster environment configuration template
+# Copy to environment.yaml and fill in actual host details
+
+platforms:
+  - id: x86
+    arch: x86_64
+    hosts:
+      - role: master
+        hostRef: spark-master-host
+      - role: worker
+        hostRef: spark-worker-1-host
+
+hostRefs:
+  spark-master-host:
+    alias: spark-master.example.com
+    user: ubuntu
+    key: ~/.ssh/id_rsa
+    port: 22
+    env: {}
+  spark-worker-1-host:
+    alias: spark-worker-1.example.com
+    user: ubuntu
+    key: ~/.ssh/id_rsa
+    port: 22
+    env: {}
+
+software:
+  pythonVersion: "3.11"
+  sparkVersion: "3.5.0"
+  sparkImage: "spark:3.5.0"
+  sparkImages:
+    x86: "pyspark:3.5.0-py311"
+  containerNetwork: spark-network
+  profilingTools:
+    - perf
+    - objdump

@@ -175,7 +175,7 @@ export type AssemblyContext = {
   source: SourceDefinition;
 };
 
-function getFourLayerBasePath(kind: "frameworks" | "datasets" | "sources" | "projects", id: string) {
+function getFourLayerBasePath(kind: "frameworks" | "datasets" | "sources" | "projects", id: string, projectRef?: string) {
   const encoded = encodeURIComponent(id);
   const suffix =
     kind === "frameworks"
@@ -186,7 +186,20 @@ function getFourLayerBasePath(kind: "frameworks" | "datasets" | "sources" | "pro
           ? ".source.json"
           : ".project.json";
 
-  return `/examples/four-layer/pyflink-reference/${kind}/${encoded}${suffix}`;
+  // Determine the project reference based on the projectRef or infer from id
+  let project = projectRef;
+  if (!project) {
+    // Infer from the id - check if it's a known project pattern
+    if (id.includes("pyspark") || id.includes("spark")) {
+      project = "pyspark-reference";
+    } else if (id.includes("pyflink") || id.includes("flink")) {
+      project = "pyflink-reference";
+    } else {
+      project = "pyflink-reference"; // default fallback
+    }
+  }
+
+  return `/examples/four-layer/${project}/${kind}/${encoded}${suffix}`;
 }
 
 async function loadJson<T>(path: string): Promise<T> {
@@ -206,31 +219,34 @@ function resolvePublicPath(path: string) {
   return new URL(path, globalThis.location?.origin ?? "http://localhost").toString();
 }
 
-export async function loadProject(projectId: string): Promise<ProjectDefinition> {
-  return loadJson<ProjectDefinition>(getFourLayerBasePath("projects", projectId));
+export async function loadProject(projectId: string, projectRef?: string): Promise<ProjectDefinition> {
+  return loadJson<ProjectDefinition>(getFourLayerBasePath("projects", projectId, projectRef));
 }
 
-export async function loadFramework(frameworkId: string): Promise<FrameworkDefinition> {
-  return loadJson<FrameworkDefinition>(getFourLayerBasePath("frameworks", frameworkId));
+export async function loadFramework(frameworkId: string, projectRef?: string): Promise<FrameworkDefinition> {
+  return loadJson<FrameworkDefinition>(getFourLayerBasePath("frameworks", frameworkId, projectRef));
 }
 
-export async function loadDataset(datasetId: string): Promise<DatasetDefinition> {
-  return loadJson<DatasetDefinition>(getFourLayerBasePath("datasets", datasetId));
+export async function loadDataset(datasetId: string, projectRef?: string): Promise<DatasetDefinition> {
+  return loadJson<DatasetDefinition>(getFourLayerBasePath("datasets", datasetId, projectRef));
 }
 
-export async function loadSource(sourceId: string): Promise<SourceDefinition> {
-  return loadJson<SourceDefinition>(getFourLayerBasePath("sources", sourceId));
+export async function loadSource(sourceId: string, projectRef?: string): Promise<SourceDefinition> {
+  return loadJson<SourceDefinition>(getFourLayerBasePath("sources", sourceId, projectRef));
 }
 
 export async function loadAssemblyContext(projectId: string): Promise<AssemblyContext> {
-  const project = await loadProject(projectId);
+  // Determine project reference directory from projectId
+  const projectRef = projectId.includes("pyspark") ? "pyspark-reference" : "pyflink-reference";
+
+  const project = await loadProject(projectId, projectRef);
   if (!project.frameworkRef || !project.datasetRef || !project.sourceRef) {
     throw new Error(`Project ${projectId} is missing frameworkRef/datasetRef/sourceRef`);
   }
   const [framework, dataset, source] = await Promise.all([
-    loadFramework(project.frameworkRef),
-    loadDataset(project.datasetRef),
-    loadSource(project.sourceRef),
+    loadFramework(project.frameworkRef, projectRef),
+    loadDataset(project.datasetRef, projectRef),
+    loadSource(project.sourceRef, projectRef),
   ]);
 
   return {

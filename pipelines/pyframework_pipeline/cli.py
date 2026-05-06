@@ -14,6 +14,9 @@ def _load_adapter(framework: str):
     if framework == "pyflink":
         from .adapters.pyflink.environment import PyFlinkEnvironmentAdapter
         return PyFlinkEnvironmentAdapter()
+    elif framework == "pyspark":
+        from .adapters.pyspark.environment import PySparkEnvironmentAdapter
+        return PySparkEnvironmentAdapter()
     raise ValueError(f"No environment adapter for framework: {framework}")
 
 

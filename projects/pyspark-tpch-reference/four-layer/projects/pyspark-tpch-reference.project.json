@@ -1,0 +1,12 @@
+{
+  "id": "pyspark-tpch-reference",
+  "name": "PySpark TPC-H Reference",
+  "schemaVersion": 1,
+  "frameworkRef": "pyspark",
+  "datasetRef": "pyspark-tpch-2026q2",
+  "sourceRef": "pyspark-reference-source",
+  "caseBindings": [],
+  "functionBindings": [],
+  "patternBindings": [],
+  "rootCauseBindings": []
+}

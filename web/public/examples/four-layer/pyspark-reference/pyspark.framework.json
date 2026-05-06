@@ -1,0 +1,61 @@
+{
+  "id": "pyspark",
+  "name": "PySpark",
+  "kind": "python-framework",
+  "version": "reference-demo",
+  "languageScope": [
+    "cpython",
+    "python-third-party",
+    "framework-python-code"
+  ],
+  "analysisScope": [
+    "python-side framework overhead",
+    "cpython and python-third-party runtime cost triggered by framework paths"
+  ],
+  "excludedScope": [
+    "business udf logic",
+    "spark java executor runtime",
+    "non-python external runtimes"
+  ],
+  "metricDefinitions": [
+    "total_time",
+    "job_duration",
+    "business_operator_time",
+    "framework_call_time"
+  ],
+  "taxonomy": {
+    "components": [
+      "cpython",
+      "third_party",
+      "glibc",
+      "kernel",
+      "bridge_runtime",
+      "unknown"
+    ],
+    "categoriesL1": [
+      "Interpreter",
+      "Memory",
+      "GC",
+      "Object Model",
+      "Type Operations",
+      "Calls / Dispatch",
+      "Native Boundary",
+      "Kernel",
+      "Unknown"
+    ]
+  },
+  "metricGuardrails": {
+    "unknownWarnThreshold": "5%",
+    "unknownBlockThreshold": "10%",
+    "scopeSpecRef": "docs/specs/pyspark-framework-spec.md"
+  },
+  "pageConfig": {
+    "defaultNormalization": "per_invocation",
+    "coreDrilldownChain": [
+      "by-stack",
+      "component/category",
+      "function",
+      "asm-source-diff"
+    ]
+  }
+}
