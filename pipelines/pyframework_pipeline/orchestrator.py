@@ -1234,6 +1234,9 @@ def _run_collect_substep(
 
 def _find_perf_container(executor: "SshExecutor", env_config: dict, project_path: Path | None = None) -> str:
     """Find which container has perf.data."""
+    if project_path is not None:
+        from .framework_config import get_framework_config
+
     _tm_count = _parse_tm_count(env_config)
     if project_path is not None:
         fw_config = get_framework_config(project_path)
