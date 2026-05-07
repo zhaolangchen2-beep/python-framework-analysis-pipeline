@@ -526,11 +526,18 @@ def _run_benchmark_pyspark(
 
     lang_env_pyspark_dir = f"{fw_config.lang_env_root}/pyspark"
     test_sh = f"{lang_env_pyspark_dir}/test.sh"
+    test_sh_non_tty = "/tmp/pyframework-pyspark-test-non-tty.sh"
     master_container = fw_config.master_container
     worker_containers = fw_config.get_worker_containers(count=_parse_tm_count(env_config))
     perf_data_path = fw_config.get_perf_data_path()
 
-    logger.info("[5a] Preparing perf wrapper for lang_env benchmark on %s...", platform)
+    logger.info("[5a] Preparing non-TTY test.sh copy and perf wrapper on %s...", platform)
+    executor.run(
+        f"cp {shlex.quote(test_sh)} {shlex.quote(test_sh_non_tty)} && "
+        f"sed -i 's/docker exec -it /docker exec -i /g' {shlex.quote(test_sh_non_tty)} && "
+        f"chmod +x {shlex.quote(test_sh_non_tty)}",
+        timeout=30,
+    )
     perf_binary = _find_container_perf(executor, container=master_container)
     wrapper_path = _deploy_lang_env_perf_wrapper(
         executor,
@@ -546,7 +553,7 @@ def _run_benchmark_pyspark(
         logger.info("[5a] Running query %s on %s via lang_env test.sh...", query, platform)
         cmd = (
             f"cd {shlex.quote(lang_env_pyspark_dir)} && "
-            f"bash {shlex.quote(test_sh)} -q {shlex.quote(query)} -c {rows} "
+            f"bash {shlex.quote(test_sh_non_tty)} -q {shlex.quote(query)} -c {rows} "
             f"--spark-args {shlex.quote(f'--conf spark.pyspark.python={wrapper_path}') }"
         )
         result = executor.run(cmd, timeout=600, stream=True)
