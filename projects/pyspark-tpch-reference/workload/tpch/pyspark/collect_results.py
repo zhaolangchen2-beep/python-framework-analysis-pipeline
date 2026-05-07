@@ -31,7 +31,7 @@ def main():
     parser.add_argument(
         "--query",
         required=True,
-        help="Query ID (e.g., q06, q12)",
+        help="Query ID (e.g., tpch_q1, tpch_q12)",
     )
     parser.add_argument(
         "--rows",
@@ -76,7 +76,7 @@ def run_benchmark(query: str, rows: int, spark_home: str) -> list[dict[str, Any]
     Parameters
     ----------
     query : str
-        Query ID (e.g., q06)
+        Query ID (e.g., tpch_q1)
     rows : int
         Number of rows for TPC-H data
     spark_home : str
@@ -92,7 +92,7 @@ def run_benchmark(query: str, rows: int, spark_home: str) -> list[dict[str, Any]
     if not spark_submit.exists():
         raise FileNotFoundError(f"spark-submit not found at {spark_submit}")
 
-    # Construct spark-submit command
+    # Construct spark-submit command using the runner interface
     cmd = [
         str(spark_submit),
         "--master",
@@ -102,7 +102,7 @@ def run_benchmark(query: str, rows: int, spark_home: str) -> list[dict[str, Any]
         str(workload_dir / "run.py"),
         "--query",
         query,
-        "--rows",
+        "--row_count",
         str(rows),
     ]
 

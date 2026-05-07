@@ -7,11 +7,10 @@ workload:
   localDir: workload/tpch/pyspark
   type: sql
   queries:
-    - q1
-    - q6
-    - q12
-    - q14
-    - q19
+    - tpch_q1
+    - tpch_q3
+    - tpch_q6
+    - tpch_q12
   rows: 10000000
 
 run:
