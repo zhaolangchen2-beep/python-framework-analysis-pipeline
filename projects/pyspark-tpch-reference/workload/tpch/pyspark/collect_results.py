@@ -88,6 +88,7 @@ def run_benchmark(query: str, rows: int, spark_home: str) -> list[dict[str, Any]
     """
     workload_dir = Path(__file__).parent.absolute()
     spark_submit = Path(spark_home) / "bin" / "spark-submit"
+    jar_path = str(workload_dir / "spark-benchmark-udfs-java.jar")
 
     if not spark_submit.exists():
         raise FileNotFoundError(f"spark-submit not found at {spark_submit}")
@@ -99,6 +100,12 @@ def run_benchmark(query: str, rows: int, spark_home: str) -> list[dict[str, Any]
         "spark://spark-master:7077",
         "--deploy-mode",
         "client",
+        "--jars",
+        jar_path,
+        "--conf",
+        f"spark.driver.extraClassPath={jar_path}",
+        "--conf",
+        f"spark.executor.extraClassPath={jar_path}",
         str(workload_dir / "run.py"),
         "--query",
         query,
