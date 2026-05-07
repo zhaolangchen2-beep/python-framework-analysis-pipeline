@@ -554,7 +554,7 @@ def _run_benchmark_pyspark(
         cmd = (
             f"cd {shlex.quote(lang_env_pyspark_dir)} && "
             f"bash {shlex.quote(test_sh_non_tty)} -q {shlex.quote(query)} -c {rows} -v "
-            f"--spark-args {shlex.quote(f'--conf spark.pyspark.python={wrapper_path}') }"
+            f"--spark-args {shlex.quote(f'--conf spark.executorEnv.PYSPARK_PYTHON={wrapper_path}') }"
         )
         result = executor.run(cmd, timeout=600, stream=True)
         if result.returncode != 0:
