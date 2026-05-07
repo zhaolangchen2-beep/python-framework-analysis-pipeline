@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import textwrap
 import uuid
 from datetime import datetime, timezone
@@ -390,6 +391,25 @@ def _run_workload_deploy(
     executor = build_executor(host_ref, env_config)
     fw_config = get_framework_config(project_path)
 
+    if fw_config.framework_id == "pyspark" and fw_config.lang_env_root:
+        test_sh = f"{fw_config.lang_env_root}/pyspark/test.sh"
+        lang_env_dir = f"{fw_config.lang_env_root}/pyspark"
+
+        check_root = executor.run(f"test -d {shlex.quote(fw_config.lang_env_root)}", timeout=15)
+        if check_root.returncode != 0:
+            raise StepError(f"langEnvRoot not found on remote host: {fw_config.lang_env_root}")
+
+        check_dir = executor.run(f"test -d {shlex.quote(lang_env_dir)}", timeout=15)
+        if check_dir.returncode != 0:
+            raise StepError(f"PySpark lang_env directory not found on remote host: {lang_env_dir}")
+
+        check_script = executor.run(f"test -f {shlex.quote(test_sh)}", timeout=15)
+        if check_script.returncode != 0:
+            raise StepError(f"PySpark test.sh not found on remote host: {test_sh}")
+
+        logger.info("Verified remote lang_env PySpark benchmark at %s", lang_env_dir)
+        return
+
     # Upload workload to remote host staging.
     remote_dir = "/tmp/pyframework-workload"
     # Remove stale remote directory so scp -r doesn't create a nested
@@ -466,7 +486,7 @@ def _run_benchmark_pyspark(
     project_path: Path, run_dir: Path, platform: str,
     *, force: bool = False,
 ) -> None:
-    """Run PySpark benchmark using collect_results.py wrapper."""
+    """Run PySpark benchmark using the remote lang_env test.sh baseline."""
     from .config import get_workload_config, load_environment_config
     from .framework_config import get_framework_config
     from .remote import build_executor, get_platform_host_ref
@@ -478,15 +498,12 @@ def _run_benchmark_pyspark(
     host_ref = get_platform_host_ref(env_config, platform)
     executor = build_executor(host_ref, env_config)
     fw_config = get_framework_config(project_path)
-    python_bin = _find_container_python(executor, env_config, container=fw_config.master_container)
 
     platform_run_dir = run_dir / platform
     platform_run_dir.mkdir(parents=True, exist_ok=True)
     timing_path = platform_run_dir / "timing" / "timing-normalized.json"
 
-    # When resuming, re-deploy workload
     if force:
-        _run_workload_deploy(project_path, run_dir, platform)
         removed = []
         for old in [
             platform_run_dir / "timing" / "timing-normalized.json",
@@ -498,107 +515,89 @@ def _run_benchmark_pyspark(
         if removed:
             logger.info("[5a] Force: removed old artifacts: %s", removed)
 
-    # Run benchmark with perf
     if timing_path.exists() and timing_path.stat().st_size > 0:
         logger.info("[5a] timing-normalized.json exists, skipping benchmark on %s", platform)
+        return
+
+    if not queries:
+        raise StepError("No queries configured")
+    if not fw_config.lang_env_root:
+        raise StepError("PySpark langEnvRoot is not configured in environment.yaml software.langEnvRoot")
+
+    lang_env_pyspark_dir = f"{fw_config.lang_env_root}/pyspark"
+    test_sh = f"{lang_env_pyspark_dir}/test.sh"
+    master_container = fw_config.master_container
+    worker_containers = fw_config.get_worker_containers(count=_parse_tm_count(env_config))
+    perf_data_path = fw_config.get_perf_data_path()
+
+    logger.info("[5a] Preparing perf wrapper for lang_env benchmark on %s...", platform)
+    perf_binary = _find_container_perf(executor, container=master_container)
+    wrapper_path = _deploy_lang_env_perf_wrapper(
+        executor,
+        master_container,
+        worker_containers,
+        perf_binary,
+        perf_data_path,
+    )
+
+    wall_clock_times: dict[str, dict] = {}
+
+    for query in queries:
+        logger.info("[5a] Running query %s on %s via lang_env test.sh...", query, platform)
+        cmd = (
+            f"cd {shlex.quote(lang_env_pyspark_dir)} && "
+            f"bash {shlex.quote(test_sh)} -q {shlex.quote(query)} -c {rows} "
+            f"--spark-args {shlex.quote(f'--conf spark.pyspark.python={wrapper_path}') }"
+        )
+        result = executor.run(cmd, timeout=600, stream=True)
+        if result.returncode != 0:
+            raise StepError(
+                f"Benchmark {query} failed (exit {result.returncode}):\n"
+                f"  Command: {cmd}\n"
+                f"  output: {result.stdout[-2000:]}"
+            )
+
+        parsed = _parse_lang_env_benchmark_output(result.stdout, query, rows)
+        wall_clock_times[query] = parsed
+        logger.info(
+            "  %s: wall-clock %.3fs, throughput %s rows/s, py=%d ns, fw=%d ns",
+            query,
+            parsed["wallClockSeconds"],
+            parsed.get("throughputRowsPerSec", "-"),
+            parsed.get("totalPyDurationNs", 0),
+            parsed.get("totalFrameworkOverheadNs", 0),
+        )
+
+        master_logs = executor.docker_logs(master_container, tail=200)
+        (platform_run_dir / "tm-stdout-master.log").write_text(master_logs, encoding="utf-8")
+        for i, worker_container in enumerate(worker_containers, 1):
+            logs = executor.docker_logs(worker_container, tail=50)
+            (platform_run_dir / f"tm-stdout-worker-{i}.log").write_text(logs, encoding="utf-8")
+
+    _merge_wall_clock_times(platform_run_dir, platform, wall_clock_times)
+
+    perf_check = None
+    perf_container = None
+    for c in [master_container] + worker_containers:
+        check = executor.run(
+            f"docker exec {c} bash -c 'ls -lh {perf_data_path} 2>&1'",
+            timeout=15,
+        )
+        if check.returncode == 0 and "No such file" not in check.stdout:
+            perf_check = check
+            perf_container = c
+            break
+    if perf_check is None:
+        logger.warning(
+            "[5a] perf.data was not found in any container after running %d queries. "
+            "This may indicate that the test.sh spark-args wrapper was not applied.",
+            len(queries)
+        )
     else:
-        if not queries:
-            raise StepError("No queries configured")
+        logger.info("[5a] perf.data verified in %s: %s", perf_container, perf_check.stdout.strip())
 
-        # Run each query using collect_results.py in spark-master
-        master_container = fw_config.master_container
-        master_workdir = fw_config.master_workdir
-
-        # Set up perf recording
-        logger.info("[5a] Deploying perf wrapper on %s...", platform)
-        tm_count = _parse_tm_count(env_config)
-        _ensure_container_perf(
-            executor,
-            tm_count,
-            include_jm=True,
-            master_container=master_container,
-            worker_containers=fw_config.get_worker_containers(count=tm_count),
-            perf_data_path=fw_config.get_perf_data_path(),
-        )
-        perf_binary = _find_container_perf(executor, container=master_container)
-        _deploy_perf_wrapper(
-            executor,
-            tm_count,
-            python_bin,
-            perf_binary,
-            include_jm=True,
-            master_container=master_container,
-            worker_containers=fw_config.get_worker_containers(count=tm_count),
-            perf_data_path=fw_config.get_perf_data_path(),
-        )
-
-
-        for query in queries:
-            logger.info("[5a] Running query %s on %s...", query, platform)
-            timing_output_dir = platform_run_dir / "timing"
-            timing_output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Execute collect_results.py in spark-master container
-            result = executor.run(
-                f"docker exec {master_container} {python_bin} "
-                f"{master_workdir}/collect_results.py "
-                f"--query {query} --rows {rows} "
-                f"--output-dir /opt/spark/apps/timing",
-                timeout=300,
-                stream=True,
-            )
-            if result.returncode != 0:
-                raise StepError(
-                    f"Benchmark {query} failed (exit {result.returncode}):\n"
-                    f"  Command: docker exec {master_container} {python_bin} "
-                    f"{master_workdir}/collect_results.py --query {query} --rows {rows}\n"
-                    f"  output: {result.stdout[-2000:]}"
-                )
-
-            logger.info("  %s: completed", query)
-
-            # Copy timing results from container
-            executor.run(
-                f"docker cp {master_container}:/opt/spark/apps/timing/timing-normalized.json "
-                f"{timing_output_dir}/timing-normalized.json",
-                timeout=30,
-            )
-
-            # Collect logs from master and workers
-            master_logs = executor.docker_logs(master_container, tail=200)
-            (platform_run_dir / "tm-stdout-master.log").write_text(master_logs, encoding="utf-8")
-
-            worker_containers = fw_config.get_worker_containers(count=tm_count)
-            for i, worker_container in enumerate(worker_containers, 1):
-                logs = executor.docker_logs(worker_container, tail=50)
-                (platform_run_dir / f"tm-stdout-worker-{i}.log").write_text(logs, encoding="utf-8")
-
-        # Verify perf.data was created
-        perf_data_path = fw_config.get_perf_data_path()
-        perf_check = None
-        perf_container = None
-        containers_to_check = [master_container] + fw_config.get_worker_containers(count=tm_count)
-        for c in containers_to_check:
-            check = executor.run(
-                f"docker exec {c} bash -c 'ls -lh {perf_data_path} 2>&1'",
-                timeout=15,
-            )
-            if check.returncode == 0 and "No such file" not in check.stdout:
-                perf_check = check
-                perf_container = c
-                break
-        if perf_check is None:
-            logger.warning(
-                "[5a] perf.data was not found in any container after "
-                "running %d queries. This may be expected if perf wrapper setup failed.",
-                len(queries)
-            )
-        else:
-            logger.info("[5a] perf.data verified in %s: %s", perf_container, perf_check.stdout.strip())
-
-        # Collect ASM from worker containers
-        logger.info("[5b] Collecting ASM from PySpark workers...")
-        _collect_pyspark_asm(executor, platform_run_dir, fw_config, tm_count)
+    logger.info("[5b] Collecting ASM from PySpark workers...")
+    _collect_pyspark_asm(executor, platform_run_dir, fw_config, _parse_tm_count(env_config))
 
 
 def _run_benchmark(
@@ -876,6 +875,66 @@ def _ensure_pyflink_runner(
         logger.info("[5a] Created pyflink-udf-runner.sh on %s", c)
 
 
+def _deploy_lang_env_perf_wrapper(
+    executor: "SshExecutor",
+    master_container: str,
+    worker_containers: list[str],
+    perf_binary: str,
+    perf_data_path: str,
+) -> str:
+    """Deploy a python wrapper into PySpark containers for test.sh --spark-args injection."""
+    import base64
+
+    wrapper_path = "/tmp/_perf_python_wrapper.sh"
+    script = (
+        "#!/bin/bash\n"
+        "export OPENBLAS_NUM_THREADS=1\n"
+        "export OMP_NUM_THREADS=1\n"
+        "export MKL_NUM_THREADS=1\n"
+        "export NUMEXPR_NUM_THREADS=1\n"
+        f"exec {perf_binary} record -F 999 -g -e task-clock -o {perf_data_path} -- python3 \"$@\" 2>/dev/null\n"
+    )
+    encoded = base64.b64encode(script.encode()).decode()
+
+    for container in [master_container] + worker_containers:
+        executor.run(f"docker exec {container} rm -f {perf_data_path}", timeout=30)
+        executor.run(
+            f"docker exec {container} bash -c "
+            f"'echo {encoded} | base64 -d > {wrapper_path} && chmod +x {wrapper_path}'",
+            timeout=30,
+        )
+
+    return wrapper_path
+
+
+def _parse_lang_env_benchmark_output(output: str, query: str, rows: int) -> dict:
+    import re as _re
+
+    line_pattern = _re.compile(
+        r"(?P<query>\S+)\s*\|\s*UDF=\s*(?P<udf>\d+)\s*ns\s*\|\s*"
+        r"Overhead=\s*(?P<overhead>\d+)\s*ns\s*\|\s*"
+        r"Throughput=\s*(?P<throughput>\d+)\s*rows/s\s*\|\s*"
+        r"Duration=\s*(?P<duration>[0-9.]+)\s*s"
+    )
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        match = line_pattern.search(line)
+        if match and match.group("query") == query:
+            per_udf = int(match.group("udf"))
+            per_overhead = int(match.group("overhead"))
+            duration = float(match.group("duration"))
+            throughput = int(match.group("throughput"))
+            return {
+                "wallClockSeconds": duration,
+                "throughputRowsPerSec": throughput,
+                "totalPyDurationNs": per_udf * rows,
+                "totalFrameworkOverheadNs": per_overhead * rows,
+            }
+
+    raise StepError(f"Could not parse lang_env benchmark output for query {query}")
+
+
 def _parse_benchmark_result(stdout: str, query_id: str) -> dict | None:
     """Parse BENCHMARK_RESULT JSON from benchmark_runner.py stdout."""
     import json as _json
@@ -920,7 +979,6 @@ def _merge_wall_clock_times(
         case["metrics"]["wallClockTime"] = {"wall_clock_ns": wall_clock_ns}
         case["metrics"]["tmE2eTime"] = {"wall_clock_ns": wall_clock_ns}
 
-        # Operator/framework timing from PostUDF's [BENCHMARK_SUMMARY].
         py_ns = wc.get("totalPyDurationNs", 0)
         fw_ns = wc.get("totalFrameworkOverheadNs", 0)
         if py_ns > 0:
@@ -1099,10 +1157,10 @@ def _run_collect_substep(
             logger.info("[5b.1] perf.data already exists (%d bytes), skipping",
                          perf_data_local.stat().st_size)
             return
-        perf_container = _find_perf_container(executor, env_config)
+        perf_container = _find_perf_container(executor, env_config, project_path)
         logger.info("[5b.1] Collecting perf.data from %s on %s...", perf_container, platform)
         _collect_binary_from_container(
-            executor, perf_container, "/tmp/perf-udf.data", perf_data_local,
+            executor, perf_container, get_framework_config(project_path).get_perf_data_path(), perf_data_local,
         )
         return
 
@@ -1148,20 +1206,30 @@ def _run_collect_substep(
     raise StepError(f"Unknown 5b sub-step: {substep}")
 
 
-def _find_perf_container(executor: "SshExecutor", env_config: dict) -> str:
+def _find_perf_container(executor: "SshExecutor", env_config: dict, project_path: Path | None = None) -> str:
     """Find which container has perf.data."""
     _tm_count = _parse_tm_count(env_config)
-    for c in ["flink-jm"] + [f"flink-tm{i}" for i in range(1, _tm_count + 1)]:
+    if project_path is not None:
+        fw_config = get_framework_config(project_path)
+        perf_data_path = fw_config.get_perf_data_path()
+        containers = [fw_config.master_container] + fw_config.get_worker_containers(count=_tm_count)
+        fallback = fw_config.master_container
+    else:
+        perf_data_path = "/tmp/perf-udf.data"
+        containers = ["flink-jm"] + [f"flink-tm{i}" for i in range(1, _tm_count + 1)]
+        fallback = "flink-jm"
+
+    for c in containers:
         check = executor.run(
             f"docker exec {c} bash -c "
-            "'test -s /tmp/perf-udf.data && echo found'",
+            f"'test -s {perf_data_path} && echo found'",
             timeout=15,
         )
         if "found" in check.stdout:
             logger.info("perf.data found in %s", c)
             return c
-    logger.warning("Could not locate perf.data in any container, using JM as fallback")
-    return "flink-jm"
+    logger.warning("Could not locate perf.data in any container, using %s as fallback", fallback)
+    return fallback
 
 
 
