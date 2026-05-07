@@ -49,10 +49,14 @@ class PySparkEnvironmentAdapter:
         master_host = hosts_by_role.get("master", hosts_by_role.get("client", ""))
         host_alias = host_refs.get(master_host, {}).get("alias", master_host)
 
+        container_names = software.get("pysparkContainerNames", {}) if isinstance(software, dict) else {}
+        master_container = container_names.get("master", "pyspark-spark-master")
+        worker_containers = container_names.get("workers", []) if isinstance(container_names, dict) else []
+        if not isinstance(worker_containers, list) or not worker_containers:
+            worker_containers = [f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1)]
+
         # Step 0: Verify expected containers already exist
-        expected_containers = ["pyspark-spark-master"] + [
-            f"pyspark-spark-worker-{i}" for i in range(1, worker_count + 1)
-        ]
+        expected_containers = [master_container] + worker_containers[:worker_count]
         for name in expected_containers:
             steps.append(PlanStep(
                 id=f"check-container-{name}",
@@ -68,7 +72,7 @@ class PySparkEnvironmentAdapter:
             id="readiness-cluster-health",
             kind="framework-readiness",
             hostRef=master_host,
-            command="docker exec pyspark-spark-master curl -sf http://localhost:8080/json/ >/dev/null",
+            command=f"docker exec {master_container} curl -sf http://localhost:8080/json/ >/dev/null",
             description=f"Verify Spark master health on {host_alias}",
             timeout=120,
         ))
@@ -80,7 +84,7 @@ class PySparkEnvironmentAdapter:
             hostRef=master_host,
             command=(
                 f"for i in \\$(seq 1 10); do "
-                f"count=\\$(docker exec pyspark-spark-master curl -sf "
+                f"count=\\$(docker exec {master_container} curl -sf "
                 f"http://localhost:8080/json/ | "
                 f"python3 -c 'import sys,json; "
                 f"d=json.load(sys.stdin); print(len(d.get(\"workers\",[])))'); "
@@ -134,7 +138,7 @@ class PySparkEnvironmentAdapter:
                 id="verify-profiling-tools",
                 kind="framework-readiness",
                 hostRef=master_host,
-                command=f"docker exec pyspark-spark-master bash -c '{verifications}'",
+                command=f"docker exec {master_container} bash -c '{verifications}'",
                 description=f"Verify profiling tools available on {host_alias}",
             ))
 

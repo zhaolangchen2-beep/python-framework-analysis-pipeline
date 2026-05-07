@@ -11,11 +11,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from pyframework_pipeline.framework_config import get_framework_config
+
 
 def collect_pyspark_asm(
     run_dir: Path,
     platform: str,
     executor: Any | None = None,
+    project_path: Path | None = None,
 ) -> dict[str, Any]:
     """Collect assembly from PySpark worker containers.
 
@@ -28,6 +31,8 @@ def collect_pyspark_asm(
     executor : SshExecutor or None
         SSH executor for remote container access.
         If None, assumes local execution.
+    project_path : Path or None
+        Resolved project.yaml path for loading configurable PySpark container names.
 
     Returns
     -------
@@ -36,9 +41,13 @@ def collect_pyspark_asm(
     asm_dir = run_dir / "asm"
     asm_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect assembly from each Spark worker container
+    # Collect assembly from each Spark container
     container_asms = {}
-    workers = ["pyspark-spark-master", "pyspark-spark-worker-1", "pyspark-spark-worker-2"]
+    if project_path is not None:
+        fw_config = get_framework_config(project_path)
+        workers = [fw_config.master_container] + fw_config.get_worker_containers()
+    else:
+        workers = ["pyspark-spark-master", "pyspark-spark-worker-1", "pyspark-spark-worker-2"]
 
     for container in workers:
         asm_file = asm_dir / f"{container}-dump.s"
