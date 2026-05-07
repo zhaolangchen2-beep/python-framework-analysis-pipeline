@@ -1149,7 +1149,8 @@ def _run_collect_substep(
     Sub-steps: 5b.1 (perf.data), 5b.2 (perf-kits), 5b.2b (source extraction),
     5b.3 (objdump ASM).  Each checks its own output artifact and skips if present.
     """
-    from .config import load_environment_config
+    from .config import load_environment_config, get_workload_config
+    from .framework_config import get_framework_config
     from .remote import build_executor, get_platform_host_ref
 
     env_config = load_environment_config(project_path)
