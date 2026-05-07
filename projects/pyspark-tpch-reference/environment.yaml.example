@@ -31,6 +31,7 @@ software:
   sparkImages:
     x86: "pyspark:3.5.0-py311"
   langEnvRoot: /home/z30059427/lang_env
+  cpythonSourceTarball: /root/src/lang_env/tmp/Python-3.14.3.tgz
   pysparkContainerNames:
     master: pyspark-spark-master
     workers:

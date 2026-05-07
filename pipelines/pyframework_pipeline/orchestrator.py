@@ -1213,8 +1213,16 @@ def _run_collect_substep(
             logger.info("[5b.2b] CPython source map exists, skipping extraction on %s", platform)
             return
         perf_container = _find_perf_container(executor, env_config, project_path)
+        fw_config = get_framework_config(project_path)
+        source_tarball_host_path = env_config.get("software", {}).get("cpythonSourceTarball")
         logger.info("[5b.2b] Extracting CPython source for hotspot symbols on %s...", platform)
-        _extract_cpython_sources(executor, perf_csv, source_map_path, perf_container)
+        _extract_cpython_sources(
+            executor,
+            perf_csv,
+            source_map_path,
+            perf_container,
+            source_tarball_host_path=source_tarball_host_path,
+        )
         return
 
     if substep == "5b.3":
@@ -1278,6 +1286,8 @@ def _extract_cpython_sources(
     perf_csv: Path,
     output_path: Path,
     container: str = "flink-jm",
+    *,
+    source_tarball_host_path: str | None = None,
 ) -> None:
     """Extract C source code for hotspot symbols from CPython source in container.
 
@@ -1374,7 +1384,7 @@ def _extract_cpython_sources(
         executor.run(f"docker cp {host_staging}/. {container}:/tmp/_src_extract/", timeout=30)
         executor.run(f"docker exec -u root {container} chown -R flink:flink /tmp/_src_extract", timeout=15)
 
-    # Ensure CPython source is available (extract from pyenv cache if needed).
+    # Ensure CPython source is available.
     src_prep = executor.run(
         f"docker exec {container} bash -c '"
         "test -d /tmp/cpython-src/Objects && echo ok || "
@@ -1385,7 +1395,27 @@ def _extract_cpython_sources(
         stream=True,
     )
     if "ok" not in src_prep.stdout and "extracted" not in src_prep.stdout:
-        logger.warning("CPython source not available in container, skipping source extraction")
+        if source_tarball_host_path:
+            host_tarball = source_tarball_host_path
+            container_tarball = "/tmp/cpython-source.tgz"
+            check_tarball = executor.run(f"test -f {host_tarball}", timeout=15)
+            if check_tarball.returncode == 0:
+                executor.run(f"docker cp {host_tarball} {container}:{container_tarball}", timeout=60)
+                retry = executor.run(
+                    f"docker exec {container} bash -c '"
+                    "mkdir -p /tmp/cpython-src && tar xf /tmp/cpython-source.tgz -C /tmp/cpython-src --strip-components=1 && echo extracted'",
+                    timeout=120,
+                    stream=True,
+                )
+                if "extracted" not in retry.stdout:
+                    logger.warning("CPython source tarball fallback did not extract successfully from %s", host_tarball)
+                else:
+                    src_prep = retry
+            else:
+                logger.warning("Configured cpythonSourceTarball not found on remote host: %s", host_tarball)
+
+    if "ok" not in src_prep.stdout and "extracted" not in src_prep.stdout:
+        logger.warning("CPython source not available in container and no usable host tarball fallback; skipping source extraction")
         executor.run(f"docker exec {container} rm -rf /tmp/_src_extract", timeout=15)
         executor.run(f"rm -rf {host_staging}", timeout=15)
         return
