@@ -66,9 +66,9 @@ def run_backfill(
     perf_result = backfill_perf(arm_run_dir, x86_run_dir, dataset)
     logger.info(
         "Perf backfill: %d functions, %d components, %d categories",
-        perf_result.get("functions_count", 0),
-        perf_result.get("components_count", 0),
-        perf_result.get("categories_count", 0),
+        perf_result.get("functions", 0),
+        perf_result.get("components", 0),
+        perf_result.get("categories", 0),
     )
 
     # Ensure required top-level arrays exist (schema requires patterns and rootCauses).
@@ -78,11 +78,11 @@ def run_backfill(
     asm_result = backfill_asm(arm_run_dir, x86_run_dir, source, dataset)
     logger.info(
         "ASM backfill: %d artifacts, %d functions (%d both, %d arm-only, %d x86-only)",
-        asm_result.get("artifacts_added", 0),
-        asm_result.get("functions_total", 0),
-        asm_result.get("both_platforms", 0),
-        asm_result.get("arm_only", 0),
-        asm_result.get("x86_only", 0),
+        asm_result.get("newArtifacts", 0),
+        asm_result.get("uniqueSymbols", 0),
+        asm_result.get("bothPlatforms", 0),
+        asm_result.get("armOnly", 0),
+        asm_result.get("x86Only", 0),
     )
 
     bindings = generate_bindings(dataset, source)

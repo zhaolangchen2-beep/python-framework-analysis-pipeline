@@ -1,14 +1,21 @@
 """PySpark-specific backfill: source anchors and UDF tracking.
 
-Creates source anchors mapping Python UDF functions to their source code locations.
+Creates schema-compliant sourceFiles and sourceAnchors for Python UDF code.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
+
+
+def _file_id(relative_path: str) -> str:
+    return relative_path.replace("/", "_").replace(".", "_")
+
+
+def _anchor_id(module_name: str, func_name: str) -> str:
+    return f"src_{module_name}_{func_name}"
 
 
 def backfill_pyspark_source(
@@ -30,58 +37,54 @@ def backfill_pyspark_source(
     """
     source = json.loads(source_file.read_text(encoding="utf-8"))
 
-    # Find PySpark UDF modules
     workload_dir = project_path / "workload" / "tpch" / "pyspark"
     udf_dir = workload_dir / "udfs"
 
-    source_anchors = {}
+    source_files: list[dict[str, Any]] = []
+    source_anchors: list[dict[str, Any]] = []
+    seen_files: set[str] = set()
 
-    # Scan each UDF module for function definitions
+    def add_file(relative_path: str) -> str:
+        file_id = _file_id(relative_path)
+        if file_id not in seen_files:
+            source_files.append({
+                "id": file_id,
+                "path": relative_path,
+            })
+            seen_files.add(file_id)
+        return file_id
+
+    def add_anchors(file_path: Path, module_name: str, anchor_type: str) -> None:
+        relative_path = str(file_path.relative_to(project_path))
+        file_id = add_file(relative_path)
+        content = file_path.read_text(encoding="utf-8")
+        lines = content.splitlines()
+
+        for idx, line in enumerate(lines, 1):
+            if not line.strip().startswith("def "):
+                continue
+            func_name = line.split("(")[0].replace("def ", "").strip()
+            source_anchors.append({
+                "id": _anchor_id(module_name, func_name),
+                "fileId": file_id,
+                "functionId": f"{module_name}.{func_name}",
+                "symbol": func_name,
+                "sourceFile": relative_path,
+                "line": idx,
+                "type": "setup" if func_name == "setup" else anchor_type,
+            })
+
     if udf_dir.exists():
         for udf_file in sorted(udf_dir.glob("tpch_*.py")):
             if udf_file.name == "tpch_constants.py":
                 continue
+            add_anchors(udf_file, udf_file.stem, "utility")
 
-            content = udf_file.read_text(encoding="utf-8")
-            lines = content.splitlines()
-
-            module_name = udf_file.stem
-
-            # Extract function definitions and their line numbers
-            for idx, line in enumerate(lines, 1):
-                if line.strip().startswith("def "):
-                    func_name = line.split("(")[0].replace("def ", "").strip()
-                    func_id = f"{module_name}.{func_name}"
-
-                    func_type = "setup" if func_name == "setup" else "utility"
-
-                    source_anchors[func_id] = {
-                        "file": str(udf_file.relative_to(project_path)),
-                        "module": module_name,
-                        "function": func_name,
-                        "line": idx,
-                        "type": func_type,
-                    }
-
-    # Add framework runner functions
     runner_file = workload_dir / "framework" / "runner.py"
     if runner_file.exists():
-        content = runner_file.read_text(encoding="utf-8")
-        lines = content.splitlines()
+        add_anchors(runner_file, "runner", "framework")
 
-        for idx, line in enumerate(lines, 1):
-            if line.strip().startswith("def "):
-                func_name = line.split("(")[0].replace("def ", "").strip()
-                func_id = f"runner.{func_name}"
-
-                source_anchors[func_id] = {
-                    "file": str(runner_file.relative_to(project_path)),
-                    "module": "runner",
-                    "function": func_name,
-                    "line": idx,
-                    "type": "framework",
-                }
-
+    source["sourceFiles"] = source_files
     source["sourceAnchors"] = source_anchors
     return source
 

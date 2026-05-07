@@ -458,10 +458,19 @@ def backfill_asm(
             known_src = source_map.get(symbol, {})
             src_snippet = known_src.get("snippet", "")
             if func_id and src_snippet and func_id not in existing_source_anchors:
+                source_file = known_src.get("sourceFile", func.get("sourceFile", ""))
+                file_id = source_file.replace("/", "_").replace(".", "_") if source_file else ""
+                if file_id and not any(sf.get("id") == file_id for sf in source.get("sourceFiles", [])):
+                    source.setdefault("sourceFiles", []).append({
+                        "id": file_id,
+                        "path": source_file,
+                    })
                 anchor = {
+                    "id": f"src_{func_id}",
+                    "fileId": file_id,
                     "functionId": func_id,
                     "symbol": symbol,
-                    "sourceFile": known_src.get("sourceFile", func.get("sourceFile", "")),
+                    "sourceFile": source_file,
                     "snippet": src_snippet,
                 }
                 source.setdefault("sourceAnchors", []).append(anchor)
