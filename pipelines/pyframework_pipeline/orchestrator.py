@@ -1660,7 +1660,9 @@ def _run_perf_kits_on_remote(
         return
 
     host_staging = "/tmp/pyframework-perf-kits-scripts"
+    host_perf_input = "/tmp/pyframework-perf-input.data"
     executor.run(f"rm -rf {host_staging} && mkdir -p {host_staging}", timeout=30)
+    executor.push_file(perf_data_local, host_perf_input)
     for script_name in [
         "run_single_platform_pipeline.py",
         "perf_data_to_csv.py",
@@ -1688,10 +1690,18 @@ def _run_perf_kits_on_remote(
         timeout=30,
     )
     executor.run(
+        f"docker cp {host_perf_input} {container}:{perf_data_container}",
+        timeout=30,
+    )
+    executor.run(
         f"docker exec -u root {container} chown -R {chown_user} {container_kits}",
         timeout=15,
     )
-    executor.run(f"rm -rf {host_staging}", timeout=30)
+    executor.run(
+        f"docker exec -u root {container} chmod 644 {perf_data_container}",
+        timeout=15,
+    )
+    executor.run(f"rm -rf {host_staging} {host_perf_input}", timeout=30)
 
     logger.info("Running python-performance-kits pipeline inside %s (%s)...", container, platform)
     result = executor.run(
