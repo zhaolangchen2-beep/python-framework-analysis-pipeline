@@ -392,8 +392,14 @@ def _run_workload_deploy(
     fw_config = get_framework_config(project_path)
 
     if fw_config.framework_id == "pyspark" and fw_config.lang_env_root:
-        test_sh = f"{fw_config.lang_env_root}/pyspark/test.sh"
         lang_env_dir = f"{fw_config.lang_env_root}/pyspark"
+        remote_dir = "/tmp/pyframework-lang-env"
+        local_lang_env_dir = project_path.parent / "lang_env"
+        local_test_sh = local_lang_env_dir / "test.sh"
+        remote_test_sh = f"{remote_dir}/test.sh"
+
+        if not local_test_sh.exists():
+            raise StepError(f"Project-owned PySpark lang_env test.sh not found: {local_test_sh}")
 
         check_root = executor.run(f"test -d {shlex.quote(fw_config.lang_env_root)}", timeout=15)
         if check_root.returncode != 0:
@@ -403,11 +409,17 @@ def _run_workload_deploy(
         if check_dir.returncode != 0:
             raise StepError(f"PySpark lang_env directory not found on remote host: {lang_env_dir}")
 
-        check_script = executor.run(f"test -f {shlex.quote(test_sh)}", timeout=15)
-        if check_script.returncode != 0:
-            raise StepError(f"PySpark test.sh not found on remote host: {test_sh}")
+        executor.run(f"rm -rf {remote_dir}", timeout=15)
+        ok = executor.push_dir(local_lang_env_dir, remote_dir)
+        if not ok:
+            raise StepError(f"Failed to upload PySpark lang_env helper dir to {host_ref}:\n  Local: {local_lang_env_dir}\n  Remote: {remote_dir}")
 
-        logger.info("Verified remote lang_env PySpark benchmark at %s", lang_env_dir)
+        check_script = executor.run(f"test -f {shlex.quote(remote_test_sh)}", timeout=15)
+        if check_script.returncode != 0:
+            raise StepError(f"Uploaded PySpark lang_env test.sh not found on remote host: {remote_test_sh}")
+
+        executor.run(f"chmod +x {shlex.quote(remote_test_sh)}", timeout=15)
+        logger.info("Deployed project-owned lang_env PySpark helper to %s", remote_test_sh)
         return
 
     # Upload workload to remote host staging.
@@ -525,19 +537,13 @@ def _run_benchmark_pyspark(
         raise StepError("PySpark langEnvRoot is not configured in environment.yaml software.langEnvRoot")
 
     lang_env_pyspark_dir = f"{fw_config.lang_env_root}/pyspark"
-    test_sh = f"{lang_env_pyspark_dir}/test.sh"
-    test_sh_non_tty = "/tmp/pyframework-pyspark-test-non-tty.sh"
+    remote_helper_dir = "/tmp/pyframework-lang-env"
+    test_sh = f"{remote_helper_dir}/test.sh"
     master_container = fw_config.master_container
     worker_containers = fw_config.get_worker_containers(count=_parse_tm_count(env_config))
     perf_data_path = fw_config.get_perf_data_path()
 
-    logger.info("[5a] Preparing non-TTY test.sh copy and perf wrapper on %s...", platform)
-    executor.run(
-        f"cp {shlex.quote(test_sh)} {shlex.quote(test_sh_non_tty)} && "
-        f"sed -i 's/docker exec -it /docker exec -i /g' {shlex.quote(test_sh_non_tty)} && "
-        f"chmod +x {shlex.quote(test_sh_non_tty)}",
-        timeout=30,
-    )
+    logger.info("[5a] Preparing perf wrapper for lang_env benchmark on %s...", platform)
     perf_binary = _find_container_perf(executor, container=master_container)
     wrapper_path = _deploy_lang_env_perf_wrapper(
         executor,
