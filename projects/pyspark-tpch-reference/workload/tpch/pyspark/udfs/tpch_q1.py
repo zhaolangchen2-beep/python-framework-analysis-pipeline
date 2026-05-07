@@ -64,6 +64,7 @@ def setup(spark, args):
     sql = """
         SELECT r.l_returnflag, r.l_linestatus,
                r.disc_price, r.charge, r.passed_filter,
+               r.py_duration,
                calc_overhead(r.row_id, r.py_duration) AS overhead
         FROM (
             SELECT process(

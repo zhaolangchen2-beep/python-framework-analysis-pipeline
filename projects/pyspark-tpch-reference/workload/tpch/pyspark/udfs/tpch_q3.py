@@ -60,6 +60,7 @@ def setup(spark, args):
     df.createOrReplaceTempView("src")
     sql = """
         SELECT r.l_orderkey, r.revenue, r.o_orderdate, r.passed_filter,
+               r.py_duration,
                calc_overhead(r.row_id, r.py_duration) AS overhead
         FROM (
             SELECT process(
