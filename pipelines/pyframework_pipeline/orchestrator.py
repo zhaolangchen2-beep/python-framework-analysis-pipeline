@@ -1577,10 +1577,10 @@ for so_name, syms in sorted(so_to_syms.items()):
     awk_file = os.path.join(output_dir, '_extract.awk')
     with open(awk_file, 'w') as f:
         for sym, h in remaining.items():
-            f.write('/<' + sym + '.*>:/ { file="' + output_dir + '/' + h + '.s"; printing=1 }\\n')
-        f.write('/^$/ { if (printing) { close(file); printing=0 }; next }\\n')
-        f.write('printing { print > file }\\n')
-        f.write('END { if (printing) close(file) }\\n')
+            f.write('/<' + sym + '.*>:/ { file="' + output_dir + '/' + h + '.s"; printing=1 }\n')
+        f.write('/^$/ { if (printing) { close(file); printing=0 }; next }\n')
+        f.write('printing { print > file }\n')
+        f.write('END { if (printing) close(file) }\n')
 
     cmd = 'objdump -d ' + so_path + ' | awk -f ' + awk_file
     print(f"CMD:{so_name}: {cmd}")
