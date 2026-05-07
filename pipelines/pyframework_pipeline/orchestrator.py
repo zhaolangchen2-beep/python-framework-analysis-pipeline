@@ -1625,6 +1625,8 @@ def _run_perf_kits_on_remote(
 ) -> None:
     """Run python-performance-kits pipeline inside the target container."""
     if project_path:
+        from .framework_config import get_framework_config
+
         repo_root = project_path.parent.parent.parent
         fw_config = get_framework_config(project_path)
         perf_data_container = fw_config.get_perf_data_path()
