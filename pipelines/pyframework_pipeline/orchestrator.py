@@ -1509,111 +1509,108 @@ def _collect_asm_from_all_libs(
     existing_map = _load_symbol_map(asm_dir)
 
     # Write a single Python script + JSON manifest to run inside the container.
-    asm_script = textwrap.dedent(r"""\
-        import sys, os, re, json, subprocess, hashlib
+    asm_script = textwrap.dedent(r'''
+import sys, os, re, json, subprocess, hashlib
 
-        manifest = sys.argv[1]
-        output_dir = sys.argv[2]
+manifest = sys.argv[1]
+output_dir = sys.argv[2]
 
-        with open(manifest) as f:
-            data = json.load(f)
-        so_to_syms = data['so_to_syms']
-        existing_map = data.get('existing_map', {})
+with open(manifest) as f:
+    data = json.load(f)
+so_to_syms = data['so_to_syms']
+existing_map = data.get('existing_map', {})
 
-        collected_hashes = set(existing_map.keys()) if existing_map else set()
+collected_hashes = set(existing_map.keys()) if existing_map else set()
 
-        symbol_map = dict(existing_map)
-        search_dirs = '/usr/bin /usr/local/bin /usr/lib /usr/local/lib /opt /lib /root/.pyenv /root'.split()
-        total_collected = 0
+symbol_map = dict(existing_map)
+search_dirs = '/usr/bin /usr/local/bin /usr/lib /usr/local/lib /opt /lib /root/.pyenv /root'.split()
+total_collected = 0
 
-        def _resolve_python_binary(base):
-            candidates = [base]
-            if re.fullmatch(r'python\d+(?:\.\d+)?', base):
-                candidates.extend(['python3', 'python'])
-            for candidate in candidates:
-                result = subprocess.run(
-                    ['bash', '-lc', f'command -v {candidate}'],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    resolved = result.stdout.strip().splitlines()
-                    if resolved:
-                        return resolved[0]
-            return None
+def _resolve_python_binary(base):
+    candidates = [base]
+    if re.fullmatch(r'python\d+(?:\.\d+)?', base):
+        candidates.extend(['python3', 'python'])
+    for candidate in candidates:
+        result = subprocess.run(
+            ['bash', '-lc', f'command -v {candidate}'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            resolved = result.stdout.strip().splitlines()
+            if resolved:
+                return resolved[0]
+    return None
 
-        def find_so(so_name):
-            base = os.path.basename(so_name)
-            stem = base.split('.so')[0]
-            python_bin = _resolve_python_binary(base)
-            if python_bin:
-                return python_bin
-            for d in search_dirs:
-                for root, dirs, files in os.walk(d):
-                    for fn in files:
-                        if fn == base:
-                            return os.path.join(root, fn)
-                        if '.so' in fn and stem in fn:
-                            return os.path.join(root, fn)
-            return None
+def find_so(so_name):
+    base = os.path.basename(so_name)
+    stem = base.split('.so')[0]
+    python_bin = _resolve_python_binary(base)
+    if python_bin:
+        return python_bin
+    for d in search_dirs:
+        for root, dirs, files in os.walk(d):
+            for fn in files:
+                if fn == base:
+                    return os.path.join(root, fn)
+                if '.so' in fn and stem in fn:
+                    return os.path.join(root, fn)
+    return None
 
-        for so_name, syms in sorted(so_to_syms.items()):
-            so_path = find_so(so_name)
-            if not so_path:
-                print(f"skip:{so_name}:not_found")
-                continue
+for so_name, syms in sorted(so_to_syms.items()):
+    so_path = find_so(so_name)
+    if not so_path:
+        print(f"skip:{so_name}:not_found")
+        continue
 
-            remaining = {}
-            for sym in syms:
-                h = hashlib.md5(sym.encode()).hexdigest()[:8]
-                if h not in collected_hashes:
-                    remaining[sym] = h
+    remaining = {}
+    for sym in syms:
+        h = hashlib.md5(sym.encode()).hexdigest()[:8]
+        if h not in collected_hashes:
+            remaining[sym] = h
 
-            if not remaining:
-                print(f"{so_name}: already_collected/{len(syms)}")
-                continue
+    if not remaining:
+        print(f"{so_name}: already_collected/{len(syms)}")
+        continue
 
-            # Generate awk script: for each symbol, match /<symbol.*>:/ to /^$/
-            awk_file = os.path.join(output_dir, '_extract.awk')
-            with open(awk_file, 'w') as f:
-                for sym, h in remaining.items():
-                    f.write('/<' + sym + '.*>:/ { file="' + output_dir + '/' + h + '.s"; printing=1 }\\n')
-                f.write('/^$/ { if (printing) { close(file); printing=0 }; next }\\n')
-                f.write('printing { print > file }\\n')
-                f.write('END { if (printing) close(file) }\\n')
+    awk_file = os.path.join(output_dir, '_extract.awk')
+    with open(awk_file, 'w') as f:
+        for sym, h in remaining.items():
+            f.write('/<' + sym + '.*>:/ { file="' + output_dir + '/' + h + '.s"; printing=1 }\\n')
+        f.write('/^$/ { if (printing) { close(file); printing=0 }; next }\\n')
+        f.write('printing { print > file }\\n')
+        f.write('END { if (printing) close(file) }\\n')
 
-            # objdump -d (no -S) + awk extracts each function's disassembly
-            cmd = 'objdump -d ' + so_path + ' | awk -f ' + awk_file
-            print(f"CMD:{so_name}: {cmd}")
-            subprocess.run(cmd, shell=True, timeout=300)
+    cmd = 'objdump -d ' + so_path + ' | awk -f ' + awk_file
+    print(f"CMD:{so_name}: {cmd}")
+    subprocess.run(cmd, shell=True, timeout=300)
 
-            # Check results
-            for sym, h in remaining.items():
-                out_file = os.path.join(output_dir, h + '.s')
-                if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
-                    symbol_map[h] = sym
-                    collected_hashes.add(h)
-                elif os.path.exists(out_file):
-                    os.unlink(out_file)
+    for sym, h in remaining.items():
+        out_file = os.path.join(output_dir, h + '.s')
+        if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+            symbol_map[h] = sym
+            collected_hashes.add(h)
+        elif os.path.exists(out_file):
+            os.unlink(out_file)
 
-            if os.path.exists(awk_file):
-                os.unlink(awk_file)
+    if os.path.exists(awk_file):
+        os.unlink(awk_file)
 
-            collected = sum(1 for s in syms
-                           if hashlib.md5(s.encode()).hexdigest()[:8] in collected_hashes)
-            no_addr = [s for s in remaining
-                       if hashlib.md5(s.encode()).hexdigest()[:8] not in collected_hashes]
-            if no_addr:
-                print(f"{so_name}: no_addr symbols: {no_addr}")
-            print(f"{so_name}: collected={collected},no_addr={len(no_addr)}/{len(syms)}")
-            total_collected += collected
+    collected = sum(1 for s in syms
+                   if hashlib.md5(s.encode()).hexdigest()[:8] in collected_hashes)
+    no_addr = [s for s in remaining
+               if hashlib.md5(s.encode()).hexdigest()[:8] not in collected_hashes]
+    if no_addr:
+        print(f"{so_name}: no_addr symbols: {no_addr}")
+    print(f"{so_name}: collected={collected},no_addr={len(no_addr)}/{len(syms)}")
+    total_collected += collected
 
-        map_path = os.path.join(output_dir, 'symbol_map.json')
-        with open(map_path, 'w') as f:
-            json.dump(symbol_map, f, ensure_ascii=False, indent=2)
-        print(f"done:total={total_collected},map_entries={len(symbol_map)}")
-    """)
+map_path = os.path.join(output_dir, 'symbol_map.json')
+with open(map_path, 'w') as f:
+    json.dump(symbol_map, f, ensure_ascii=False, indent=2)
+print(f"done:total={total_collected},map_entries={len(symbol_map)}")
+''')
 
     manifest = {
         "so_to_syms": so_to_syms,
