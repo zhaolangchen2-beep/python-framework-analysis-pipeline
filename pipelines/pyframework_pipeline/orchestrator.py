@@ -802,20 +802,20 @@ def _ensure_container_perf(
 
     for c in containers:
         check = executor.run(
-            f"docker exec {c} bash -c "
-            "'ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
+            f"docker exec {c} bash -lc "
+            "'command -v perf || ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
             timeout=30,
         )
         if check.returncode != 0 or not check.stdout.strip():
             raise StepError(
-                f"perf not found in {c}. linux-tools must be installed in the target container image.\n"
+                f"perf not found in {c}. linux-tools/perf must be installed in the target container image.\n"
                 f"  stdout: {check.stdout[:500]}\n"
                 f"  stderr: {check.stderr[:500]}"
             )
     probe_container = (worker_containers or [f"flink-tm{i}" for i in range(1, tm_count + 1)])[0]
     return executor.run(
-        f"docker exec {probe_container} bash -c "
-        "'ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
+        f"docker exec {probe_container} bash -lc "
+        "'command -v perf || ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
         timeout=30,
     ).stdout.strip()
 
@@ -997,8 +997,8 @@ def _find_container_perf(
 ) -> str:
     """Find the perf binary path inside the target container."""
     result = executor.run(
-        f"docker exec {container} bash -c "
-        "'ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
+        f"docker exec {container} bash -lc "
+        "'command -v perf || ls /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -1'",
         timeout=30,
     )
     if result.returncode == 0 and result.stdout.strip():
