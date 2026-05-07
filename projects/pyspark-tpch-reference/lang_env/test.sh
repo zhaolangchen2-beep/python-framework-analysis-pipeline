@@ -342,12 +342,7 @@ run_profile() {
     local perf_exit=${PIPESTATUS[0]}
     set -e
 
-    if [ "$perf_exit" -ne 0 ]; then
-        echo "  [Profile] ⚠️  perf record exited with code $perf_exit"
-        return 1
-    fi
-
-    echo "  [Profile] perf record completed"
+    echo "  [Profile] perf record exit code: $perf_exit"
 
     # ── 验证文件 ──
     local file_size
@@ -358,6 +353,12 @@ run_profile() {
         echo "  [Profile] ⚠️  perf data file is empty"
         return 1
     fi
+
+    if [ "$perf_exit" -ne 0 ]; then
+        echo "  [Profile] perf record exited with code $perf_exit, but data file is present; continuing"
+    fi
+
+    echo "  [Profile] perf record completed"
 
     # ── 转换为 CSV ──
     echo "  [Profile] Converting to CSV..."
