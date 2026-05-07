@@ -1808,33 +1808,41 @@ def _collect_binary_from_container(
     local_path: Path,
 ) -> bool:
     """Collect a binary file from a container via docker cp + scp."""
-    staging = f"/opt/flink/_collect_{local_path.name}"
+    staging = f"/tmp/_collect_{local_path.name}"
     host_tmp = f"/tmp/pyframework-collect-{container}-{local_path.name}"
 
-    # Copy inside container to a path accessible by docker cp.
-    executor.run(
+    prep = executor.run(
         f"docker exec -u root {container} cp {remote_path} {staging} 2>/dev/null",
         timeout=30,
     )
+    if prep.returncode != 0:
+        raise StepError(
+            f"Failed to stage binary in {container}: {remote_path} -> {staging} (exit {prep.returncode})\n"
+            f"  stderr: {prep.stderr[:500]}"
+        )
+
     executor.run(
         f"docker exec -u root {container} chmod 644 {staging} 2>/dev/null",
         timeout=30,
     )
 
-    # docker cp from container to host filesystem.
     cp_result = executor.run(
         f"docker cp {container}:{staging} {host_tmp}",
         timeout=120,
         stream=True,
     )
     if cp_result.returncode != 0:
-        logger.warning("docker cp failed for %s:%s: %s", container, staging, cp_result.stderr)
-        return False
+        raise StepError(
+            f"Failed to docker cp staged binary from {container}:{staging} (exit {cp_result.returncode})\n"
+            f"  stderr: {cp_result.stderr[:500]}"
+        )
 
-    # scp from host to local (binary-safe).
     ok = executor.fetch_file(host_tmp, local_path)
+    if not ok:
+        raise StepError(
+            f"Failed to fetch staged binary from remote host tmp path {host_tmp} to {local_path}"
+        )
 
-    # Cleanup.
     executor.run(f"docker exec {container} rm -f {staging}", timeout=30)
     executor.run(f"rm -f {host_tmp}", timeout=30)
 
