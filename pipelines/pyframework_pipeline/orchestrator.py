@@ -1198,7 +1198,7 @@ def _run_collect_substep(
         if perf_csv.exists() and perf_csv.stat().st_size > 0:
             logger.info("[5b.2] perf_records.csv exists, skipping perf-kits on %s", platform)
             return
-        perf_container = _find_perf_container(executor, env_config)
+        perf_container = _find_perf_container(executor, env_config, project_path)
         logger.info("[5b.2] Running perf-kits analysis pipeline on %s (timeout=600s)...", platform)
         _run_perf_kits_on_remote(executor, perf_data_local, perf_dir, platform, project_path, perf_container)
         return
@@ -1212,7 +1212,7 @@ def _run_collect_substep(
         if source_map_path.exists() and source_map_path.stat().st_size > 10:
             logger.info("[5b.2b] CPython source map exists, skipping extraction on %s", platform)
             return
-        perf_container = _find_perf_container(executor, env_config)
+        perf_container = _find_perf_container(executor, env_config, project_path)
         logger.info("[5b.2b] Extracting CPython source for hotspot symbols on %s...", platform)
         _extract_cpython_sources(executor, perf_csv, source_map_path, perf_container)
         return
@@ -1224,7 +1224,7 @@ def _run_collect_substep(
             logger.info("[5b.3] ASM files exist (%d), skipping objdump on %s",
                          len(list(asm_dir.glob("*.s"))), platform)
             return
-        perf_container = _find_perf_container(executor, env_config)
+        perf_container = _find_perf_container(executor, env_config, project_path)
         logger.info("[5b.3] Collecting objdump for hotspot symbols on %s...", platform)
         _collect_asm_from_all_libs(executor, perf_dir, asm_dir, platform, perf_container)
         return
@@ -1620,17 +1620,32 @@ def _run_perf_kits_on_remote(
     project_path: Path | None = None,
     container: str = "flink-jm",
 ) -> None:
-    """Run python-performance-kits pipeline inside the container.
-
-    Running inside the container gives perf report access to the exact
-    binaries (libpython3.14.so, etc.) so symbols resolve correctly.
-    """
-    # Resolve vendor dir: project_path is projects/<id>/project.yaml,
-    # repo root is project_path.parent.parent.parent.
+    """Run python-performance-kits pipeline inside the target container."""
     if project_path:
         repo_root = project_path.parent.parent.parent
+        fw_config = get_framework_config(project_path)
+        perf_data_container = fw_config.get_perf_data_path()
+        if fw_config.framework_id == "pyspark":
+            container_kits = "/opt/spark/perf-kits-scripts"
+            container_output = "/opt/spark/perf-kits-output"
+            python_bin = _find_container_python(executor, container=container)
+            perf_bin = _find_container_perf(executor, container=container)
+            chown_user = "root:root"
+        else:
+            container_kits = "/opt/flink/perf-kits-scripts"
+            container_output = "/opt/flink/perf-kits-output"
+            python_bin = _find_container_python(executor)
+            perf_bin = _find_container_perf(executor)
+            chown_user = "flink:flink"
     else:
         repo_root = Path(__file__).resolve().parents[2]
+        perf_data_container = "/tmp/perf-udf.data"
+        container_kits = "/opt/flink/perf-kits-scripts"
+        container_output = "/opt/flink/perf-kits-output"
+        python_bin = _find_container_python(executor)
+        perf_bin = _find_container_perf(executor)
+        chown_user = "flink:flink"
+
     kits_local = repo_root / "vendor" / "python-performance-kits"
     scripts_dir = kits_local / "scripts" / "perf_insights"
     if not scripts_dir.exists():
@@ -1639,13 +1654,6 @@ def _run_perf_kits_on_remote(
         logger.warning("python-performance-kits not found at %s, skipping remote pipeline", kits_local)
         return
 
-    container_kits = "/opt/flink/perf-kits-scripts"
-    container_output = "/opt/flink/perf-kits-output"
-    perf_data_container = "/tmp/perf-udf.data"
-    python_bin = _find_container_python(executor)
-    perf_bin = _find_container_perf(executor)
-
-    # Deploy scripts into container via host staging.
     host_staging = "/tmp/pyframework-perf-kits-scripts"
     executor.run(f"rm -rf {host_staging} && mkdir -p {host_staging}", timeout=30)
     for script_name in [
@@ -1666,7 +1674,6 @@ def _run_perf_kits_on_remote(
         if src.exists():
             executor.push_file(src, f"{host_staging}/{script_name}")
 
-    # Copy scripts into container.
     executor.run(
         f"docker exec {container} rm -rf {container_kits}",
         timeout=30,
@@ -1676,12 +1683,11 @@ def _run_perf_kits_on_remote(
         timeout=30,
     )
     executor.run(
-        f"docker exec -u root {container} chown -R flink:flink {container_kits}",
+        f"docker exec -u root {container} chown -R {chown_user} {container_kits}",
         timeout=15,
     )
     executor.run(f"rm -rf {host_staging}", timeout=30)
 
-    # Run the pipeline inside the container.
     logger.info("Running python-performance-kits pipeline inside %s (%s)...", container, platform)
     result = executor.run(
         f"docker exec {container} {python_bin} "
@@ -1701,7 +1707,6 @@ def _run_perf_kits_on_remote(
             f"  stdout: {result.stdout[:500]}"
         )
 
-    # Collect outputs from container via host staging.
     host_output = "/tmp/pyframework-perf-kits-output"
     executor.run(f"rm -rf {host_output}", timeout=30)
     cp_result = executor.run(
@@ -1721,12 +1726,11 @@ def _run_perf_kits_on_remote(
         "tables/symbol_hotspots.csv",
     ]:
         remote_path = f"{host_output}/{remote_rel}"
-        local_path = perf_dir.parent / remote_rel  # perf_dir is perf/data/
+        local_path = perf_dir.parent / remote_rel
         local_path.parent.mkdir(parents=True, exist_ok=True)
         executor.fetch_file(remote_path, local_path)
         logger.info("Collected %s", remote_rel)
 
-    # Cleanup host staging only (keep container output for inspection).
     executor.run(f"docker exec {container} rm -rf {container_kits}", timeout=30)
     executor.run(f"rm -rf {host_output}", timeout=30)
 
