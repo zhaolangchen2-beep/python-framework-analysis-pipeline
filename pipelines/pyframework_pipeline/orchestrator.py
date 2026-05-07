@@ -498,7 +498,7 @@ def _run_benchmark_pyspark(
     project_path: Path, run_dir: Path, platform: str,
     *, force: bool = False,
 ) -> None:
-    """Run PySpark benchmark using the remote lang_env test.sh baseline."""
+    """Run PySpark benchmark using the remote/project-owned lang_env test.sh profile baseline."""
     from .config import get_workload_config, load_environment_config
     from .framework_config import get_framework_config
     from .remote import build_executor, get_platform_host_ref
@@ -541,28 +541,18 @@ def _run_benchmark_pyspark(
     test_sh = f"{remote_helper_dir}/test.sh"
     master_container = fw_config.master_container
     worker_containers = fw_config.get_worker_containers(count=_parse_tm_count(env_config))
-    perf_data_path = fw_config.get_perf_data_path()
-
-    logger.info("[5a] Preparing perf wrapper for lang_env benchmark on %s...", platform)
-    perf_binary = _find_container_perf(executor, container=master_container)
-    wrapper_path = _deploy_lang_env_perf_wrapper(
-        executor,
-        master_container,
-        worker_containers,
-        perf_binary,
-        perf_data_path,
-    )
 
     wall_clock_times: dict[str, dict] = {}
 
     for query in queries:
-        logger.info("[5a] Running query %s on %s via lang_env test.sh...", query, platform)
+        profile_name = f"{query}-{platform}"
+        logger.info("[5a] Running query %s on %s via lang_env test.sh --profile %s...", query, platform, profile_name)
         cmd = (
             f"cd {shlex.quote(lang_env_pyspark_dir)} && "
-            f"bash {shlex.quote(test_sh)} -q {shlex.quote(query)} -c {rows} -v "
-            f"--spark-args {shlex.quote(f'--conf spark.executorEnv.PYSPARK_PYTHON={wrapper_path}') }"
+            f"bash {shlex.quote(test_sh)} -q {shlex.quote(query)} -c {rows} "
+            f"--profile {shlex.quote(profile_name)} -v"
         )
-        result = executor.run(cmd, timeout=600, stream=True)
+        result = executor.run(cmd, timeout=900, stream=True)
         if result.returncode != 0:
             raise StepError(
                 f"Benchmark {query} failed (exit {result.returncode}):\n"
@@ -571,14 +561,16 @@ def _run_benchmark_pyspark(
             )
 
         parsed = _parse_lang_env_benchmark_output(result.stdout, query, rows)
+        parsed["profileName"] = profile_name
         wall_clock_times[query] = parsed
         logger.info(
-            "  %s: wall-clock %.3fs, throughput %s rows/s, py=%d ns, fw=%d ns",
+            "  %s: wall-clock %.3fs, throughput %s rows/s, py=%d ns, fw=%d ns, profile=%s",
             query,
             parsed["wallClockSeconds"],
             parsed.get("throughputRowsPerSec", "-"),
             parsed.get("totalPyDurationNs", 0),
             parsed.get("totalFrameworkOverheadNs", 0),
+            profile_name,
         )
 
         master_logs = executor.docker_logs(master_container, tail=200)
@@ -589,25 +581,30 @@ def _run_benchmark_pyspark(
 
     _merge_wall_clock_times(platform_run_dir, platform, wall_clock_times)
 
+    profile_dir = "/opt/spark/apps/profile"
     perf_check = None
     perf_container = None
-    for c in [master_container] + worker_containers:
+    for query, data in wall_clock_times.items():
+        profile_name = data.get("profileName")
+        if not profile_name:
+            continue
+        profile_path = f"{profile_dir}/{profile_name}.data"
         check = executor.run(
-            f"docker exec {c} bash -c 'ls -lh {perf_data_path} 2>&1'",
+            f"docker exec {master_container} bash -c 'ls -lh {profile_path} 2>&1'",
             timeout=15,
         )
         if check.returncode == 0 and "No such file" not in check.stdout:
             perf_check = check
-            perf_container = c
+            perf_container = master_container
             break
     if perf_check is None:
         logger.warning(
-            "[5a] perf.data was not found in any container after running %d queries. "
-            "This may indicate that the test.sh spark-args wrapper was not applied.",
+            "[5a] profile perf.data was not found in %s after running %d queries.",
+            master_container,
             len(queries)
         )
     else:
-        logger.info("[5a] perf.data verified in %s: %s", perf_container, perf_check.stdout.strip())
+        logger.info("[5a] profile perf.data verified in %s: %s", perf_container, perf_check.stdout.strip())
 
     logger.info("[5b] Collecting ASM from PySpark workers...")
     _collect_pyspark_asm(executor, platform_run_dir, fw_config, _parse_tm_count(env_config))
@@ -1170,6 +1167,21 @@ def _run_collect_substep(
             logger.info("[5b.1] perf.data already exists (%d bytes), skipping",
                          perf_data_local.stat().st_size)
             return
+
+        fw_config = get_framework_config(project_path)
+        if fw_config.framework_id == "pyspark" and fw_config.lang_env_root:
+            profile_dir = "/opt/spark/apps/profile"
+            queries = get_workload_config(project_path).get("queries", [])
+            if not queries:
+                raise StepError("[5b.1] No queries configured for PySpark profile collection")
+            profile_name = f"{queries[-1]}-{platform}"
+            profile_path = f"{profile_dir}/{profile_name}.data"
+            logger.info("[5b.1] Collecting profile perf.data %s from %s on %s...", profile_path, fw_config.master_container, platform)
+            _collect_binary_from_container(
+                executor, fw_config.master_container, profile_path, perf_data_local,
+            )
+            return
+
         perf_container = _find_perf_container(executor, env_config, project_path)
         logger.info("[5b.1] Collecting perf.data from %s on %s...", perf_container, platform)
         _collect_binary_from_container(
