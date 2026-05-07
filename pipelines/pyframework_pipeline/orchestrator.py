@@ -1509,7 +1509,7 @@ def _collect_asm_from_all_libs(
     existing_map = _load_symbol_map(asm_dir)
 
     # Write a single Python script + JSON manifest to run inside the container.
-    asm_script = textwrap.dedent("""\
+    asm_script = textwrap.dedent(r"""\
         import sys, os, re, json, subprocess, hashlib
 
         manifest = sys.argv[1]
@@ -1523,12 +1523,32 @@ def _collect_asm_from_all_libs(
         collected_hashes = set(existing_map.keys()) if existing_map else set()
 
         symbol_map = dict(existing_map)
-        search_dirs = '/usr/lib /usr/local/lib /opt /lib /root/.pyenv /root'.split()
+        search_dirs = '/usr/bin /usr/local/bin /usr/lib /usr/local/lib /opt /lib /root/.pyenv /root'.split()
         total_collected = 0
+
+        def _resolve_python_binary(base):
+            candidates = [base]
+            if re.fullmatch(r'python\d+(?:\.\d+)?', base):
+                candidates.extend(['python3', 'python'])
+            for candidate in candidates:
+                result = subprocess.run(
+                    ['bash', '-lc', f'command -v {candidate}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    resolved = result.stdout.strip().splitlines()
+                    if resolved:
+                        return resolved[0]
+            return None
 
         def find_so(so_name):
             base = os.path.basename(so_name)
             stem = base.split('.so')[0]
+            python_bin = _resolve_python_binary(base)
+            if python_bin:
+                return python_bin
             for d in search_dirs:
                 for root, dirs, files in os.walk(d):
                     for fn in files:

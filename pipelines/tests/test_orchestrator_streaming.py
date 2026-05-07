@@ -177,6 +177,17 @@ class TestStreamOutputCapturedInErrors(unittest.TestCase):
         self.assertEqual(errors, [], "\n".join(errors))
 
 
+class TestAsmCollectorPathResolution(unittest.TestCase):
+    """ASM collector should resolve python shared_object names to real binaries."""
+
+    def test_python_shared_object_falls_back_to_python3_binary(self):
+        self.assertIn("/usr/bin /usr/local/bin", SRC)
+        self.assertIn("def _resolve_python_binary(base):", SRC)
+        self.assertIn("re.fullmatch(r'python\\d+(?:\\.\\d+)?', base)", SRC)
+        self.assertIn("candidates.extend(['python3', 'python'])", SRC)
+        self.assertIn("command -v {candidate}", SRC)
+
+
 class TestSubStepArtifactChecks(unittest.TestCase):
     """Each sub-step must check its artifact before running."""
 
