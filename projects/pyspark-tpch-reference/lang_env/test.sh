@@ -359,16 +359,6 @@ run_profile() {
     fi
 
     echo "  [Profile] perf record completed"
-
-    # ── 转换为 CSV ──
-    echo "  [Profile] Converting to CSV..."
-
-    docker exec "$CONTAINER" bash -c \
-        "cd /opt/spark/apps/profile && python3 ${PROFILE_DIR}/perf_data_to_csv.py $perf_data_file" 2>&1 | \
-    while IFS= read -r line; do
-        echo "  [csv] $line"
-    done
-
     echo "  [Profile] ✅ Done: $perf_data_file"
 }
 # ────────────────────────────────────────────────────────────────
